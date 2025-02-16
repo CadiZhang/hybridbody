@@ -12,7 +12,6 @@ const LOCAL_RELAY_SERVER_URL: string =
   import.meta.env.VITE_LOCAL_RELAY_SERVER_URL || '';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-
 import {
   RealtimeClient,
   type FormattedItem,
@@ -21,12 +20,14 @@ import {
 import { WavRecorder, WavStreamPlayer } from '../lib/index.js';
 import { instructions } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
-
 import { X, Edit, Zap, ArrowUp, ArrowDown } from 'react-feather';
 import { Button } from '../components/button/Button.tsx';
 import { Toggle } from '../components/toggle/Toggle.tsx';
 import { Map } from '../components/Map.tsx';
 
+/******************************************************************************
+ * Types
+ ******************************************************************************/
 type CustomRealtimeEvent = RealtimeEvent & {
   count?: number;
 };
@@ -49,6 +50,9 @@ interface Coordinates {
 }
 
 export function App() {
+  /******************************************************************************
+   * API Key Handling
+   ******************************************************************************/
   /**
    * Ask user for API Key
    * If we're using the local relay server, we don't need this
@@ -62,6 +66,9 @@ export function App() {
     localStorage.setItem('tmp::voice_api_key', apiKey);
   }
 
+  /******************************************************************************
+   * Core Service Refs
+   ******************************************************************************/
   /**
    * Instantiate:
    * - WavRecorder (speech input)
@@ -85,6 +92,9 @@ export function App() {
     ),
   );
 
+  /******************************************************************************
+   * UI Refs
+   ******************************************************************************/
   /**
    * References for
    * - Rendering audio visualization (canvas)
@@ -93,10 +103,17 @@ export function App() {
    */
   const clientCanvasRef = useRef<HTMLCanvasElement>(null);
   const serverCanvasRef = useRef<HTMLCanvasElement>(null);
-  const eventsScrollHeightRef = useRef(0);
   const eventsScrollRef = useRef<HTMLDivElement>(null);
+  const eventsScrollHeightRef = useRef(0);
+  const conversationScrollRef = useRef<HTMLDivElement>(null);
+  const conversationScrollHeightRef = useRef(0);
+  const memoryScrollRef = useRef<HTMLDivElement>(null);
+  const memoryScrollHeightRef = useRef(0);
   const startTimeRef = useRef<string>(new Date().toISOString());
 
+  /******************************************************************************
+   * State Management
+   ******************************************************************************/
   /**
    * All of our variables for displaying application state
    * - items are all conversation items (dialog)
@@ -104,6 +121,7 @@ export function App() {
    * - memoryKv is for set_memory() function
    * - coords, marker are for get_weather() function
    */
+  // Conversation State
   const [items, setItems] = useState<FormattedItem[]>([]);
   const [realtimeEvents, setRealtimeEvents] = useState<CustomRealtimeEvent[]>(
     [],
@@ -111,9 +129,13 @@ export function App() {
   const [expandedEvents, setExpandedEvents] = useState<{
     [key: string]: boolean;
   }>({});
+  
+  // Connection State
   const [isConnected, setIsConnected] = useState(false);
   const [canPushToTalk, setCanPushToTalk] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
+  
+  // Tool State
   const [memoryKv, setMemoryKv] = useState<{ [key: string]: any }>({});
   const [coords, setCoords] = useState<Coordinates | null>({
     lat: 37.775593,
@@ -121,9 +143,9 @@ export function App() {
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
 
-  /**
-   * Utility for formatting the timing of logs
-   */
+  /******************************************************************************
+   * Utility Functions
+   ******************************************************************************/
   const formatTime = useCallback((timestamp: string) => {
     const startTime = startTimeRef.current;
     const t0 = new Date(startTime).valueOf();
@@ -154,6 +176,9 @@ export function App() {
     }
   }, []);
 
+  /******************************************************************************
+   * Event Handlers
+   ******************************************************************************/
   /**
    * Connect to conversation:
    * WavRecorder taks speech input, WavStreamPlayer output, client is API client
@@ -265,108 +290,11 @@ export function App() {
     setCanPushToTalk(value === 'none');
   };
 
-  /**
-   * Auto-scroll the event logs
-   */
-  useEffect(() => {
-    if (eventsScrollRef.current) {
-      const eventsEl = eventsScrollRef.current;
-      const scrollHeight = eventsEl.scrollHeight;
-      // Only scroll if height has just changed
-      if (scrollHeight !== eventsScrollHeightRef.current) {
-        eventsEl.scrollTop = scrollHeight;
-        eventsScrollHeightRef.current = scrollHeight;
-      }
-    }
-  }, [realtimeEvents]);
-
-  /**
-   * Auto-scroll the conversation logs
-   */
-  useEffect(() => {
-    const conversationEls = [].slice.call(
-      document.body.querySelectorAll('[data-conversation-content]'),
-    );
-    for (const el of conversationEls) {
-      const conversationEl = el as HTMLDivElement;
-      conversationEl.scrollTop = conversationEl.scrollHeight;
-    }
-  }, [items]);
-
-  /**
-   * Set up render loops for the visualization canvas
-   */
-  useEffect(() => {
-    let isLoaded = true;
-
-    const wavRecorder = wavRecorderRef.current;
-    const clientCanvas = clientCanvasRef.current;
-    let clientCtx: CanvasRenderingContext2D | null = null;
-
-    const wavStreamPlayer = wavStreamPlayerRef.current;
-    const serverCanvas = serverCanvasRef.current;
-    let serverCtx: CanvasRenderingContext2D | null = null;
-
-    const render = () => {
-      if (isLoaded) {
-        if (clientCanvas) {
-          if (!clientCanvas.width || !clientCanvas.height) {
-            clientCanvas.width = clientCanvas.offsetWidth;
-            clientCanvas.height = clientCanvas.offsetHeight;
-          }
-          clientCtx = clientCtx || clientCanvas.getContext('2d');
-          if (clientCtx) {
-            clientCtx.clearRect(0, 0, clientCanvas.width, clientCanvas.height);
-            const result = wavRecorder.recording
-              ? wavRecorder.getFrequencies('voice')
-              : { values: new Float32Array([0]) };
-            WavRenderer.drawBars(
-              clientCanvas,
-              clientCtx,
-              result.values,
-              '#0099ff',
-              10,
-              0,
-              8,
-            );
-          }
-        }
-        if (serverCanvas) {
-          if (!serverCanvas.width || !serverCanvas.height) {
-            serverCanvas.width = serverCanvas.offsetWidth;
-            serverCanvas.height = serverCanvas.offsetHeight;
-          }
-          serverCtx = serverCtx || serverCanvas.getContext('2d');
-          if (serverCtx) {
-            serverCtx.clearRect(0, 0, serverCanvas.width, serverCanvas.height);
-            const result = wavStreamPlayer.analyser
-              ? wavStreamPlayer.getFrequencies('voice')
-              : { values: new Float32Array([0]) };
-            WavRenderer.drawBars(
-              serverCanvas,
-              serverCtx,
-              result.values,
-              '#009900',
-              10,
-              0,
-              8,
-            );
-          }
-        }
-        window.requestAnimationFrame(render);
-      }
-    };
-    render();
-
-    return () => {
-      isLoaded = false;
-    };
-  }, []);
-
-  /**
-   * Core RealtimeClient and audio capture setup
-   * Set all of our instructions, tools, events and more
-   */
+  /******************************************************************************
+   * Effects
+   ******************************************************************************/
+  // Main effect for setting up event listeners
+  
   useEffect(() => {
     // Get refs
     const wavStreamPlayer = wavStreamPlayerRef.current;
@@ -496,18 +424,130 @@ export function App() {
     };
   }, []);
 
+  // Auto-scroll effects
+  useEffect(() => {
+    const scrollEl = conversationScrollRef.current;
+    if (scrollEl) {
+      // Only auto-scroll if we're already near the bottom
+      const isNearBottom = 
+        scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 100;
+      
+      if (isNearBottom || scrollEl.scrollHeight > conversationScrollHeightRef.current) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+      conversationScrollHeightRef.current = scrollEl.scrollHeight;
+    }
+  }, [items]); // Auto-scroll when items change
+
+  // Auto-scroll effects for events
+  useEffect(() => {
+    const scrollEl = eventsScrollRef.current;
+    if (scrollEl) {
+      const isNearBottom = 
+        scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 100;
+      
+      if (isNearBottom || scrollEl.scrollHeight > eventsScrollHeightRef.current) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+      eventsScrollHeightRef.current = scrollEl.scrollHeight;
+    }
+  }, [realtimeEvents]); // Auto-scroll when events change
+
+  // Auto-scroll effects for memory
+  useEffect(() => {
+    const scrollEl = memoryScrollRef.current;
+    if (scrollEl) {
+      const isNearBottom = 
+        scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 100;
+      
+      if (isNearBottom || scrollEl.scrollHeight > memoryScrollHeightRef.current) {
+        scrollEl.scrollTop = scrollEl.scrollHeight;
+      }
+      memoryScrollHeightRef.current = scrollEl.scrollHeight;
+    }
+  }, [memoryKv]); // Auto-scroll when memory changes
+
   /**
-   * Render the application
+   * Set up render loops for the visualization canvas
    */
+  useEffect(() => {
+    let isLoaded = true;
+
+    const wavRecorder = wavRecorderRef.current;
+    const clientCanvas = clientCanvasRef.current;
+    let clientCtx: CanvasRenderingContext2D | null = null;
+
+    const wavStreamPlayer = wavStreamPlayerRef.current;
+    const serverCanvas = serverCanvasRef.current;
+    let serverCtx: CanvasRenderingContext2D | null = null;
+
+    const render = () => {
+      if (isLoaded) {
+        if (clientCanvas) {
+          if (!clientCanvas.width || !clientCanvas.height) {
+            clientCanvas.width = clientCanvas.offsetWidth;
+            clientCanvas.height = clientCanvas.offsetHeight;
+          }
+          clientCtx = clientCtx || clientCanvas.getContext('2d');
+          if (clientCtx) {
+            clientCtx.clearRect(0, 0, clientCanvas.width, clientCanvas.height);
+            const result = wavRecorder.recording
+              ? wavRecorder.getFrequencies('voice')
+              : { values: new Float32Array([0]) };
+            WavRenderer.drawBars(
+              clientCanvas,
+              clientCtx,
+              result.values,
+              '#0099ff',
+              10,
+              0,
+              8,
+            );
+          }
+        }
+        if (serverCanvas) {
+          if (!serverCanvas.width || !serverCanvas.height) {
+            serverCanvas.width = serverCanvas.offsetWidth;
+            serverCanvas.height = serverCanvas.offsetHeight;
+          }
+          serverCtx = serverCtx || serverCanvas.getContext('2d');
+          if (serverCtx) {
+            serverCtx.clearRect(0, 0, serverCanvas.width, serverCanvas.height);
+            const result = wavStreamPlayer.analyser
+              ? wavStreamPlayer.getFrequencies('voice')
+              : { values: new Float32Array([0]) };
+            WavRenderer.drawBars(
+              serverCanvas,
+              serverCtx,
+              result.values,
+              '#009900',
+              10,
+              0,
+              8,
+            );
+          }
+        }
+        window.requestAnimationFrame(render);
+      }
+    };
+    render();
+
+    return () => {
+      isLoaded = false;
+    };
+  }, []);
+
+  /******************************************************************************
+   * Render
+   ******************************************************************************/
   return (
-    <div className="font-mono text-xs h-full flex flex-col overflow-hidden mx-2">
-      {/* Top header */}
-      <div className="flex items-center px-4 min-h-[40px]">
-        <div className="flex-grow flex items-center gap-3">
-          <img src="/openai-logomark.svg" className="w-6 h-6" />
-          <span>realtime console</span>
+    <div className="font-mono text-xs min-h-screen flex flex-col bg-white p-4">
+      {/* Top header - improve alignment and spacing */}
+      <div className="flex items-center justify-between px-6 h-14 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium">realtime console</span>
         </div>
-        <div className="content-api-key">
+        <div>
           {!LOCAL_RELAY_SERVER_URL && (
             <Button
               icon={Edit}
@@ -520,152 +560,213 @@ export function App() {
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-grow flex-shrink mx-4 flex overflow-hidden mb-6">
-        {/* Left content logs */}
-        <div className="flex-grow flex flex-col overflow-hidden">
-          {/* Events block */}
-          <div className="relative flex flex-col h-full w-full border-t border-border">
-            {/* Visualization */}
-            <div className="absolute flex bottom-1 right-2 p-1 rounded-2xl z-10 gap-0.5">
-              <div className="relative flex items-center h-10 w-[100px] gap-1 text-client">
-                <canvas ref={clientCanvasRef} className="w-full h-full" />
-              </div>
-              <div className="relative flex items-center h-10 w-[100px] gap-1 text-server">
-                <canvas ref={serverCanvasRef} className="w-full h-full" />
-              </div>
+      {/* Main content - better spacing and shadows */}
+      <div className="flex-1 flex gap-6 p-6">
+        {/* Left panel */}
+        <div className="flex-1 flex flex-col gap-6">
+          {/* Events section */}
+          <div className="h-[200px] flex flex-col rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="p-4 border-b border-gray-100">
+              <h2 className="font-medium">events</h2>
             </div>
-
-            <div className="flex-shrink-0 pt-4 pb-1">events</div>
-            <div className="text-textSecondary relative flex-grow py-2 pt-1 leading-[1.2em] overflow-auto" 
-                 ref={eventsScrollRef}>
-              {/* Events content */}
-              {!realtimeEvents.length && `awaiting connection...`}
+            <div 
+              className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent" 
+              ref={eventsScrollRef}
+            >
+              {!realtimeEvents.length && (
+                <div className="text-gray-400">awaiting connection...</div>
+              )}
               {realtimeEvents.map((realtimeEvent) => (
-                <div className="rounded whitespace-pre flex p-0 gap-4" key={realtimeEvent.event.event_id}>
-                  <div className="text-left py-1 w-20 flex-shrink-0 mr-4">
-                    {formatTime(realtimeEvent.time)}
-                  </div>
-                  <div className="flex flex-col text-[#18181b] gap-2">
-                    <div 
-                      className="p-1 -mx-2 hover:bg-[#f0f0f0] hover:rounded-lg cursor-pointer flex gap-2 items-center"
-                      onClick={() => {
-                        // toggle event details
-                        const id = realtimeEvent.event.event_id!;
-                        const expanded = { ...expandedEvents };
-                        if (expanded[id]) {
-                          delete expanded[id];
-                        } else {
-                          expanded[id] = true;
-                        }
-                        setExpandedEvents(expanded);
-                      }}>
-                      <div className={`flex-shrink-0 flex items-center gap-2 
-                        ${realtimeEvent.source === 'client' ? 'text-client' : 
-                          realtimeEvent.source === 'server' ? 'text-server' : 
-                          'text-error'}`}>
-                        {realtimeEvent.source === 'client' ? <ArrowUp className="w-3 h-3 stroke-[3]" /> 
-                                                          : <ArrowDown className="w-3 h-3 stroke-[3]" />}
-                        <span>
-                          {realtimeEvent.event.type === 'error' ? 'error!' : realtimeEvent.source}
-                        </span>
+                <div 
+                  className="mb-3 last:mb-0 hover:bg-gray-50 rounded-lg transition-colors" 
+                  key={realtimeEvent.event.event_id}
+                >
+                  <div className="rounded whitespace-pre flex p-2 gap-4">
+                    <div className="text-left py-1 w-20 flex-shrink-0 mr-4 text-gray-500">
+                      {formatTime(realtimeEvent.time)}
+                    </div>
+                    <div className="flex flex-col gap-2 min-w-0">
+                      <div 
+                        className="flex gap-2 items-center cursor-pointer"
+                        onClick={() => {
+                          const id = realtimeEvent.event.event_id!;
+                          const expanded = { ...expandedEvents };
+                          if (expanded[id]) {
+                            delete expanded[id];
+                          } else {
+                            expanded[id] = true;
+                          }
+                          setExpandedEvents(expanded);
+                        }}
+                      >
+                        <div className={`flex-shrink-0 flex items-center gap-2 
+                          ${realtimeEvent.source === 'client' ? 'text-client' : 
+                            realtimeEvent.source === 'server' ? 'text-server' : 
+                            'text-error'}`}
+                        >
+                          {realtimeEvent.source === 'client' ? 
+                            <ArrowUp className="w-3 h-3 stroke-[3]" /> : 
+                            <ArrowDown className="w-3 h-3 stroke-[3]" />
+                          }
+                          <span>
+                            {realtimeEvent.event.type === 'error' ? 'error!' : realtimeEvent.source}
+                          </span>
+                        </div>
                       </div>
+                      {/* Event details when expanded */}
+                      {expandedEvents[realtimeEvent.event.event_id!] && (
+                        <div className="text-xs bg-gray-50 rounded-lg p-3 font-mono overflow-x-auto">
+                          {JSON.stringify(realtimeEvent.event, null, 2)}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+            {/* Visualization overlay */}
+            <div className="absolute bottom-4 right-4 flex gap-2">
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-2">
+                <canvas ref={clientCanvasRef} className="w-24 h-10" />
+              </div>
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-2">
+                <canvas ref={serverCanvasRef} className="w-24 h-10" />
+              </div>
+            </div>
           </div>
 
-          {/* Conversation block */}
-          <div className="flex flex-shrink-0 w-full overflow-hidden h-[200px] min-h-0 max-h-[200px] border-t border-border">
-            <div className="flex-shrink-0 pt-4 pb-1">conversation</div>
-            <div className="relative flex-grow py-2 pt-1 overflow-auto" data-conversation-content>
-              {/* Conversation items */}
+          {/* Conversation section */}
+          <div className="h-[200px] flex flex-col rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="p-4 border-b border-gray-100">
+              <h2 className="font-medium">conversation</h2>
+            </div>
+            <div 
+              ref={conversationScrollRef}
+              className="flex-1 overflow-auto p-4 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent"
+            >
+              {!items.length && (
+                <div className="text-gray-400">awaiting connection...</div>
+              )}
               {items.map((conversationItem) => (
                 <div className="relative flex gap-4 mb-4 group" key={conversationItem.id}>
+                  {/* Role label (user/assistant) */}
                   <div className={`relative text-left w-20 flex-shrink-0 mr-4
                     ${conversationItem.role === 'user' ? 'text-client' : 
                       conversationItem.role === 'assistant' ? 'text-server' : ''}`}>
+                    <span>{conversationItem.role}</span>
+                    
                     {/* Close button - only visible on hover */}
                     <div className="absolute top-0 right-[-20px] bg-gray-400 text-white rounded-2xl p-0.5 cursor-pointer 
                                    hidden group-hover:flex hover:bg-gray-600"
-                         onClick={() => deleteConversationItem(conversationItem.id)}>
+                                 onClick={() => deleteConversationItem(conversationItem.id)}>
                       <X className="w-3 h-3 stroke-[3]" />
                     </div>
-                    {/* ... rest of conversation item content */}
+                  </div>
+
+                  {/* Message content */}
+                  <div className="flex-1 min-w-0">
+                    {conversationItem.formatted.tool && (
+                      <div className="text-gray-600">
+                        {conversationItem.formatted.text || '(function called)'}
+                      </div>
+                    )}
+                    {!conversationItem.formatted.tool && conversationItem.role === 'user' && (
+                      <div>
+                        {conversationItem.formatted.transcript ||
+                          (conversationItem.formatted.audio?.length
+                            ? '(awaiting transcript)'
+                            : conversationItem.formatted.text ||
+                              '(item sent)')}
+                      </div>
+                    )}
+                    {!conversationItem.formatted.tool && conversationItem.role === 'assistant' && (
+                      <div>
+                        {conversationItem.formatted.transcript ||
+                          conversationItem.formatted.text ||
+                          '(truncated)'}
+                      </div>
+                    )}
+                    {conversationItem.formatted.file && (
+                      <audio
+                        src={conversationItem.formatted.file.url}
+                        controls
+                        className="mt-2"
+                      />
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex-shrink-0 flex items-center justify-center gap-4">
+          {/* Controls */}
+          <div className="flex items-center justify-between gap-4 p-4 rounded-2xl border border-gray-100">
             <Toggle
               defaultValue={false}
               labels={['manual', 'vad']}
               values={['none', 'server_vad']}
               onChange={(_, value) => changeTurnEndType(value)}
             />
-            <div className="flex-grow" />
-            {isConnected && canPushToTalk && (
+            <div className="flex gap-4">
+              {isConnected && canPushToTalk && (
+                <Button
+                  label={isRecording ? 'release to send' : 'push to talk'}
+                  buttonStyle={isRecording ? 'alert' : 'regular'}
+                  disabled={!isConnected || !canPushToTalk}
+                  onMouseDown={startRecording}
+                  onMouseUp={stopRecording}
+                />
+              )}
               <Button
-                label={isRecording ? 'release to send' : 'push to talk'}
-                buttonStyle={isRecording ? 'alert' : 'regular'}
-                disabled={!isConnected || !canPushToTalk}
-                onMouseDown={startRecording}
-                onMouseUp={stopRecording}
+                label={isConnected ? 'disconnect' : 'connect'}
+                iconPosition={isConnected ? 'end' : 'start'}
+                icon={isConnected ? X : Zap}
+                buttonStyle={isConnected ? 'regular' : 'action'}
+                onClick={isConnected ? disconnectConversation : connectConversation}
               />
-            )}
-            <div className="spacer" />
-            <Button
-              label={isConnected ? 'disconnect' : 'connect'}
-              iconPosition={isConnected ? 'end' : 'start'}
-              icon={isConnected ? X : Zap}
-              buttonStyle={isConnected ? 'regular' : 'action'}
-              onClick={
-                isConnected ? disconnectConversation : connectConversation
-              }
-            />
+            </div>
           </div>
         </div>
 
         {/* Right sidebar */}
-        <div className="w-[300px] flex-shrink-0 flex flex-col ml-6 gap-6">
-          {/* Map block */}
-          <div className="rounded-2xl flex-grow flex-shrink-0 overflow-hidden relative">
-            <div className="absolute flex items-center justify-center leading-8 top-4 left-4 px-4 py-1 
-                           bg-white rounded-full min-h-button z-max text-center whitespace-pre">
-              get_weather()
-            </div>
-            <div className="absolute flex items-center justify-center leading-8 bottom-4 right-4 px-4 py-1 
-                           bg-white rounded-full min-h-button z-max text-center whitespace-pre">
-              {marker?.location || 'not yet retrieved'}
-              {!!marker?.temperature && (
-                <>
-                  <br />
-                  🌡️ {marker.temperature.value} {marker.temperature.units}
-                </>
-              )}
-              {!!marker?.wind_speed && (
-                <>
-                  {' '}
-                  🍃 {marker.wind_speed.value} {marker.wind_speed.units}
-                </>
-              )}
+        <div className="w-[320px] flex flex-col gap-6">
+          {/* Map widget */}
+          <div className="flex-1 relative rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="absolute top-4 left-4 z-10">
+              <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full">
+                <span className="font-medium">get_weather()</span>
+              </div>
             </div>
             {coords && <Map center={[coords.lat, coords.lng]} location={coords.location} />}
+            {marker && (
+              <div className="absolute bottom-4 right-4 z-10">
+                <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-sm">
+                  <div>{marker.location || 'not yet retrieved'}</div>
+                  {marker.temperature && (
+                    <div>🌡️ {marker.temperature.value} {marker.temperature.units}</div>
+                  )}
+                  {marker.wind_speed && (
+                    <div>🍃 {marker.wind_speed.value} {marker.wind_speed.units}</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Memory KV block */}
-          <div className="h-[250px] max-h-[250px] whitespace-pre bg-bgSecondary rounded-2xl">
-            <div className="absolute flex items-center justify-center leading-8 top-4 left-4 px-4 py-1 
-                           bg-white rounded-full min-h-button z-max">
-              set_memory()
+          {/* Memory widget */}
+          <div className="h-[300px] flex flex-col rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="p-4 border-b border-gray-100">
+              <h2 className="font-medium">set_memory()</h2>
             </div>
-            <div className="p-4 mt-14">
-              {JSON.stringify(memoryKv, null, 2)}
+            <div 
+              ref={memoryScrollRef}
+              className="flex-1 overflow-auto p-4 font-mono text-xs scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent"
+            >
+              {Object.keys(memoryKv).length === 0 ? (
+                <div className="text-gray-400">no stored memories...</div>
+              ) : (
+                JSON.stringify(memoryKv, null, 2)
+              )}
             </div>
           </div>
         </div>
