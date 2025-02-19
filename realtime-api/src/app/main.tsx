@@ -24,6 +24,7 @@ import { X, Edit, Zap, ArrowUp, ArrowDown } from 'react-feather';
 import { Button } from '../components/button/Button.tsx';
 import { Toggle } from '../components/toggle/Toggle.tsx';
 import { Map } from '../components/Map.tsx';
+import { ESP32Camera } from '../components/ESP32Camera';
 
 /******************************************************************************
  * Types
@@ -48,6 +49,9 @@ interface Coordinates {
     units: string;
   };
 }
+
+// Add ESP32 stream URL to your environment variables or config
+const ESP32_STREAM_URL = 'http://192.168.1.103:81/stream';
 
 export function App() {
   /******************************************************************************
@@ -142,6 +146,9 @@ export function App() {
     lng: -122.418137,
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
+
+  // Add new state for widget toggle
+  const [activeWidget, setActiveWidget] = useState<'map' | 'camera'>('map');
 
   /******************************************************************************
    * Utility Functions
@@ -730,26 +737,71 @@ export function App() {
 
         {/* Right sidebar */}
         <div className="w-[320px] flex flex-col gap-6">
-          {/* Map widget */}
+          {/* Widget container with toggle */}
           <div className="flex-1 relative rounded-2xl border border-gray-100 overflow-hidden">
-            <div className="absolute top-4 left-4 z-10">
-              <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full">
-                <span className="font-medium">get_weather()</span>
+            {/* Toggle controls */}
+            <div className="absolute top-4 right-4 z-10 flex gap-2">
+              <div className="bg-white/90 backdrop-blur-sm rounded-full flex overflow-hidden">
+                <button 
+                  onClick={() => setActiveWidget('camera')}
+                  className={`px-4 py-2 text-sm transition-colors ${
+                    activeWidget === 'camera' 
+                      ? 'bg-gray-100 text-gray-900' 
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Camera
+                </button>
+                <button 
+                  onClick={() => setActiveWidget('map')}
+                  className={`px-4 py-2 text-sm transition-colors ${
+                    activeWidget === 'map' 
+                      ? 'bg-gray-100 text-gray-900' 
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Map
+                </button>
               </div>
             </div>
-            {coords && <Map center={[coords.lat, coords.lng]} location={coords.location} />}
-            {marker && (
-              <div className="absolute bottom-4 right-4 z-10">
-                <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-sm">
-                  <div>{marker.location || 'not yet retrieved'}</div>
-                  {marker.temperature && (
-                    <div>🌡️ {marker.temperature.value} {marker.temperature.units}</div>
-                  )}
-                  {marker.wind_speed && (
-                    <div>🍃 {marker.wind_speed.value} {marker.wind_speed.units}</div>
-                  )}
+
+            {/* Widget content */}
+            {activeWidget === 'map' ? (
+              <>
+                <div className="absolute top-4 left-4 z-10">
+                  <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full">
+                    <span className="font-medium">get_weather()</span>
+                  </div>
                 </div>
-              </div>
+                {coords && <Map center={[coords.lat, coords.lng]} location={coords.location} />}
+                {marker && (
+                  <div className="absolute bottom-4 right-4 z-10">
+                    <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-sm">
+                      <div>{marker.location || 'not yet retrieved'}</div>
+                      {marker.temperature && (
+                        <div>🌡️ {marker.temperature.value} {marker.temperature.units}</div>
+                      )}
+                      {marker.wind_speed && (
+                        <div>🍃 {marker.wind_speed.value} {marker.wind_speed.units}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="absolute top-4 left-4 z-10">
+                  <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full">
+                    <span className="font-medium">esp32_camera()</span>
+                  </div>
+                </div>
+                {activeWidget === 'camera' && (
+                  <ESP32Camera 
+                    streamUrl={ESP32_STREAM_URL}
+                    onError={(error) => console.error('Camera Error:', error)}
+                  />
+                )}
+              </>
             )}
           </div>
 
