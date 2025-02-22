@@ -1,0 +1,7 @@
+opencv-python
+torch
+torchvision
+numpy
+scikit-learn
+pyserial
+panda3d
