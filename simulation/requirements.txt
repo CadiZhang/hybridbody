@@ -1,0 +1,9 @@
+# Core dependencies
+opencv-python>=4.5.0  # Computer vision library for camera capture
+numpy>=1.20.0         # Numerical operations
+torch>=1.9.0          # For MiDaS depth estimation (will be used later)
+torchvision>=0.10.0   # Additional utilities for PyTorch
+
+# Optional dependencies
+panda3d>=1.10.0       # For 3D visualization (optional)
+matplotlib>=3.4.0     # For plotting and visualization 
