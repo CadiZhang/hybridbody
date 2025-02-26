@@ -3,6 +3,7 @@
 terminal
 python -m venv venv
 source venv/bin/activate
+conda deactivate #deactive base
 
 # Blind Navigation Assistance System
 

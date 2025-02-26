@@ -1,8 +1,10 @@
 # Core dependencies
 opencv-python>=4.5.0  # Computer vision library for camera capture
 numpy>=1.20.0         # Numerical operations
-torch>=1.9.0          # For MiDaS depth estimation (will be used later)
+torch>=1.9.0          # For MiDaS depth estimation
 torchvision>=0.10.0   # Additional utilities for PyTorch
+timm>=0.6.0           # PyTorch Image Models - required by MiDaS
+einops>=0.4.1         # Tensor operations - required by MiDaS
 
 # Optional dependencies
 panda3d>=1.10.0       # For 3D visualization (optional)
