@@ -51,10 +51,18 @@ class DepthEstimator:
         self.input_width = 256
         self.input_height = 256
         
-        # Initialize depth scaling parameters (to be calibrated)
+        # Initialize depth scaling parameters with safer thresholds
         self.depth_scale_factor = 3.0
-        self.depth_min = 0.1
-        self.depth_max = 10.0
+        self.depth_min = 0.5  # Changed to 0.5m (50cm) for safety
+        self.depth_max = 10.0  # Keep max at 10m
+        
+        # Add EMA filter
+        from .normalize import EMADepthFilter
+        self.depth_filter = EMADepthFilter(alpha=0.2)
+        
+        # Load calibration if exists
+        self.calibration_file = "calibration.json"
+        self.load_calibration()
         
         print(f"Depth estimator initialized with model: {model_type}")
     
@@ -133,23 +141,40 @@ class DepthEstimator:
         
         return depth
     
+    def load_calibration(self):
+        """Load calibration from file"""
+        try:
+            import json
+            if os.path.exists(self.calibration_file):
+                with open(self.calibration_file, 'r') as f:
+                    data = json.load(f)
+                    self.depth_scale_factor = data['scale_factor']
+                    print(f"Loaded calibration: scale_factor = {self.depth_scale_factor}")
+        except Exception as e:
+            print(f"Could not load calibration: {e}")
+
+    def save_calibration(self):
+        """Save calibration to file"""
+        try:
+            import json
+            with open(self.calibration_file, 'w') as f:
+                json.dump({'scale_factor': self.depth_scale_factor}, f)
+                print(f"Saved calibration: scale_factor = {self.depth_scale_factor}")
+        except Exception as e:
+            print(f"Could not save calibration: {e}")
+
+    def calibrate(self, known_distance: float, depth_value: float):
+        """Calibrate depth scaling"""
+        self.depth_scale_factor = known_distance / depth_value
+        print(f"Depth scale factor calibrated to: {self.depth_scale_factor:.3f}")
+        self.save_calibration()  # Save after calibration
+
     def estimate_depth(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Estimate depth from a single RGB image.
-        
-        Args:
-            frame (np.ndarray): Input RGB image
-            
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: 
-                - Normalized depth map (0-1 range)
-                - Metric depth map (in approximate meters)
+        Estimate depth with EMA stabilization
         """
         # Record original size
-        original_size = frame.shape[:2]  # (height, width)
-        
-        # Start timing
-        start_time = time.time()
+        original_size = frame.shape[:2]
         
         try:
             # Preprocess the image
@@ -159,25 +184,22 @@ class DepthEstimator:
             with torch.no_grad():
                 prediction = self.model(input_tensor)
             
-            # Postprocess the depth map
+            # Initial postprocessing
             depth_map = self.postprocess(prediction, original_size)
+            
+            # Apply EMA filtering for stability
+            depth_map = self.depth_filter.filter(depth_map)
+            
+            # Convert to metric depth with safety threshold
+            metric_depth = depth_map * self.depth_scale_factor
+            metric_depth = np.clip(metric_depth, self.depth_min, self.depth_max)
             
         except Exception as e:
             print(f"Error during depth estimation: {e}")
-            # Create a fallback depth map (gradient from top to bottom)
+            # Create fallback depth map
             h, w = original_size
             depth_map = np.zeros((h, w), dtype=np.float32)
-            for y in range(h):
-                depth_map[y, :] = y / h  # Simple gradient
-        
-        # Convert to metric depth (approximate)
-        metric_depth = self.depth_min + depth_map * (self.depth_max - self.depth_min)
-        metric_depth = metric_depth * self.depth_scale_factor
-        
-        # Calculate and print inference time occasionally
-        inference_time = time.time() - start_time
-        if int(time.time()) % 10 == 0:  # Every 10 seconds
-            print(f"Depth inference time: {inference_time*1000:.1f}ms")
+            metric_depth = np.zeros_like(depth_map)
         
         return depth_map, metric_depth
     
@@ -199,14 +221,35 @@ class DepthEstimator:
         
         return colored_depth
     
-    def calibrate(self, known_distance: float, depth_value: float):
+    def compute_confidence(self, depth_map: np.ndarray, window_size: int = 5) -> np.ndarray:
         """
-        Calibrate the depth scale factor using a known distance.
+        Compute confidence map based on local depth consistency.
+        Lower variance = higher confidence.
+        """
+        # Calculate local variance using a sliding window
+        local_var = cv2.blur(depth_map**2, (window_size, window_size)) - \
+                    cv2.blur(depth_map, (window_size, window_size))**2
         
-        Args:
-            known_distance (float): Actual distance to an object in meters
-            depth_value (float): Measured depth value from the model
+        # Convert variance to confidence (inverse relationship)
+        confidence = 1 / (1 + local_var)
+        
+        # Normalize confidence to 0-1
+        confidence = (confidence - confidence.min()) / \
+                    (confidence.max() - confidence.min() + 1e-6)
+        
+        return confidence
+
+    def apply_confidence_filter(self, depth_map: np.ndarray, 
+                              confidence: np.ndarray,
+                              threshold: float = 0.5) -> np.ndarray:
         """
-        # Update the scale factor based on the calibration
-        self.depth_scale_factor = known_distance / depth_value
-        print(f"Depth scale factor calibrated to: {self.depth_scale_factor:.3f}") 
+        Filter depth values based on confidence scores.
+        """
+        # Create mask for high-confidence regions
+        mask = confidence > threshold
+        
+        # For low-confidence regions, use neighborhood average
+        filtered_depth = depth_map.copy()
+        filtered_depth[~mask] = cv2.blur(depth_map, (5, 5))[~mask]
+        
+        return filtered_depth 

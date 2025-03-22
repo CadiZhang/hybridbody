@@ -47,6 +47,12 @@ PROCESSING_HEIGHT = 224
 # This will be calibrated during setup
 DEPTH_SCALE_FACTOR = 3.0
 
+# Add new depth stabilization settings
+DEPTH_SMOOTHING_FRAMES = 3        # Number of frames for temporal smoothing
+DEPTH_CONFIDENCE_THRESHOLD = 0.5   # Minimum confidence for direct depth use
+DEPTH_MIN_RANGE = 0.5             # Minimum depth in meters
+DEPTH_MAX_RANGE = 3.0             # Maximum depth in meters
+
 # ===== OBSTACLE DETECTION SETTINGS =====
 # These control how the system identifies obstacles
 

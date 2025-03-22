@@ -51,6 +51,8 @@ def main():
     parser.add_argument("--view", type=str, default="rgb",
                         choices=["rgb", "depth", "overlay", "side-by-side"],
                         help="Visualization mode when --display is used")
+    parser.add_argument("--calibrate", action="store_true", 
+                        help="Enter calibration mode")
     
     # Parse the arguments
     args = parser.parse_args()
@@ -70,9 +72,15 @@ def main():
     from depth_estimation import DepthEstimator
     depth_estimator = DepthEstimator()
     
+    # Add tracking for depth values at center point
+    depth_values = []  # Store recent depth values for plotting
+    max_tracked_frames = 30  # Track last 30 frames
+    
+    # Initialize frame counter
+    frame_count = 0
+    
     try:
-        # Main processing loop - runs continuously until interrupted
-        frame_count = 0
+        calibration_mode = False
         while True:
             # Record the start time for FPS calculation
             start_time = time.time()
@@ -107,6 +115,13 @@ def main():
                 if frame_count % 30 == 0:
                     print(f"Nearest point: {nearest_point['distance']:.2f}m at position {x}, {y}")
             
+            # Get depth at center point for tracking
+            h, w = depth_map.shape
+            center_depth = metric_depth[h//2, w//2]
+            depth_values.append(center_depth)
+            if len(depth_values) > max_tracked_frames:
+                depth_values.pop(0)
+            
             # Create visualization if display is enabled
             if args.display:
                 # Create colored depth map for visualization
@@ -128,19 +143,76 @@ def main():
                 # Mark the nearest point on the display frame
                 display_frame = mark_nearest_point(display_frame, nearest_point)
                 
+                # Draw depth value graph
+                if len(depth_values) > 1:
+                    graph_h = 100  # Graph height
+                    graph_w = 200  # Graph width
+                    graph = np.ones((graph_h, graph_w, 3), dtype=np.uint8) * 255
+                    
+                    # Scale values to fit graph
+                    min_d = min(depth_values)
+                    max_d = max(depth_values)
+                    if max_d > min_d:
+                        scaled_values = [int(graph_h - (d - min_d) * graph_h / (max_d - min_d)) 
+                                      for d in depth_values]
+                        
+                        # Draw lines connecting points
+                        for i in range(len(scaled_values)-1):
+                            pt1 = (i * graph_w // max_tracked_frames, scaled_values[i])
+                            pt2 = ((i+1) * graph_w // max_tracked_frames, scaled_values[i+1])
+                            cv2.line(graph, pt1, pt2, (0, 0, 255), 2)
+                    
+                    # Add graph to corner of display
+                    display_frame[20:20+graph_h, 20:20+graph_w] = graph
+                
+                # Add current depth value text
+                cv2.putText(display_frame, 
+                          f"Center Depth: {center_depth:.2f}m",
+                          (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Handle calibration mode
+                if calibration_mode:
+                    cv2.putText(display_frame, 
+                              "CALIBRATION MODE - Enter distance in meters (0-9):",
+                              (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(display_frame, 
+                              f"Current center depth: {center_depth:.3f}",
+                              (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                else:
+                    cv2.putText(display_frame, 
+                              f"Depth: {metric_depth[h//2, w//2]:.2f}m (press 'c' for calibration)",
+                              (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
                 # Show the visualization
                 cv2.imshow("Blind Navigation System", display_frame)
                 
-                # Check for 'q' key press to exit
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                # Get key press and add debug print
+                key = cv2.waitKey(1) & 0xFF
+                if key != 255:  # If any key was pressed
+                    print(f"Key pressed: {chr(key) if key < 128 else key}")
                 
-                # Toggle view mode with 'v' key
-                if cv2.waitKey(1) & 0xFF == ord('v'):
+                # Handle key presses
+                if key == ord('q'):
+                    print("Quitting...")
+                    break
+                elif key == ord('c'):
+                    print("Entering calibration mode...")
+                    calibration_mode = True
+                elif key == ord('v'):
                     views = ["rgb", "depth", "overlay", "side-by-side"]
                     current_idx = views.index(args.view)
                     args.view = views[(current_idx + 1) % len(views)]
                     print(f"View mode changed to: {args.view}")
+                
+                # Handle calibration number input
+                if calibration_mode and ord('0') <= key <= ord('9'):
+                    distance = float(chr(key))
+                    print(f"Calibrating for distance: {distance}m")
+                    h, w = depth_map.shape
+                    center_depth = depth_map[h//2, w//2]
+                    depth_estimator.calibrate(known_distance=distance, depth_value=center_depth)
+                    print(f"Calibrated with distance {distance}m")
+                    calibration_mode = False
             
             # === Future: Add obstacle detection here ===
             # obstacles = obstacle_detector.detect(metric_depth)

@@ -10,6 +10,7 @@ including:
 import numpy as np
 import cv2
 from typing import Tuple
+from collections import deque
 
 def normalize_depth(depth_map: np.ndarray) -> np.ndarray:
     """
@@ -106,4 +107,176 @@ def depth_to_distance(depth_map: np.ndarray, scale_factor: float = 3.0,
     # Apply calibration factor
     metric_depth = metric_depth * scale_factor
     
-    return metric_depth 
+    return metric_depth
+
+def clamp_depth_range(depth_map: np.ndarray, 
+                     min_depth: float = 0.5,
+                     max_depth: float = 3.0) -> np.ndarray:
+    """
+    Clamp depth values to a realistic range based on physical constraints.
+    """
+    return np.clip(depth_map, min_depth, max_depth)
+
+class DepthCalibrator:
+    """
+    Handles depth calibration using known reference distances.
+    """
+    def __init__(self):
+        self.calibration_points = []  # [(measured_depth, actual_depth), ...]
+        self.scale_factor = None
+        self.offset = None
+    
+    def add_calibration_point(self, measured_depth: float, actual_depth: float):
+        """
+        Add a calibration point with known actual distance.
+        """
+        self.calibration_points.append((measured_depth, actual_depth))
+        self._update_calibration()
+    
+    def _update_calibration(self):
+        """
+        Update calibration parameters using linear regression.
+        """
+        if len(self.calibration_points) < 2:
+            return
+            
+        measured = np.array([p[0] for p in self.calibration_points])
+        actual = np.array([p[1] for p in self.calibration_points])
+        
+        # Simple linear regression
+        A = np.vstack([measured, np.ones_like(measured)]).T
+        self.scale_factor, self.offset = np.linalg.lstsq(A, actual, rcond=None)[0]
+    
+    def calibrate_depth(self, depth_map: np.ndarray) -> np.ndarray:
+        """
+        Apply calibration to depth map.
+        """
+        if self.scale_factor is None:
+            return depth_map
+            
+        return depth_map * self.scale_factor + self.offset
+
+class DepthSmoother:
+    """
+    Handles temporal smoothing of depth maps using a weighted moving average.
+    More recent frames have higher weight in the average.
+    """
+    def __init__(self, buffer_size=3):
+        self.buffer = deque(maxlen=buffer_size)
+        # Weights give more importance to recent frames
+        self.weights = np.array([0.5, 0.3, 0.2])  # Must sum to 1.0
+    
+    def update(self, depth_map: np.ndarray) -> np.ndarray:
+        """
+        Update buffer with new depth map and return smoothed result.
+        """
+        self.buffer.append(depth_map.copy())
+        
+        if len(self.buffer) < self.buffer.maxlen:
+            return depth_map
+        
+        # Apply weighted average to available frames
+        smoothed = np.zeros_like(depth_map)
+        weights = self.weights[-len(self.buffer):]
+        weights = weights / weights.sum()  # Normalize weights
+        
+        for i, frame in enumerate(self.buffer):
+            smoothed += frame * weights[i]
+            
+        return smoothed 
+
+class DepthStabilizer:
+    """
+    Combines EMA filtering with confidence-based stabilization
+    """
+    def __init__(self, alpha=0.2, confidence_threshold=0.5):
+        self.alpha = alpha
+        self.previous_depth = None
+        self.confidence_threshold = confidence_threshold
+    
+    def apply_ema_filter(self, current_depth):
+        """
+        Apply Exponential Moving Average filter
+        """
+        if self.previous_depth is None:
+            self.previous_depth = current_depth
+            return current_depth
+            
+        filtered_depth = self.alpha * current_depth + \
+                        (1 - self.alpha) * self.previous_depth
+        self.previous_depth = filtered_depth
+        return filtered_depth
+    
+    def compute_confidence(self, depth_map: np.ndarray, window_size: int = 5) -> np.ndarray:
+        """
+        Compute confidence map based on local depth consistency
+        """
+        local_var = cv2.blur(depth_map**2, (window_size, window_size)) - \
+                    cv2.blur(depth_map, (window_size, window_size))**2
+        
+        confidence = 1 / (1 + local_var)
+        confidence = (confidence - confidence.min()) / \
+                    (confidence.max() - confidence.min() + 1e-6)
+        
+        return confidence
+    
+    def stabilize(self, depth_map: np.ndarray) -> np.ndarray:
+        """
+        Apply hybrid stabilization:
+        - Use EMA for all pixels
+        - Apply additional filtering for low-confidence regions
+        """
+        # Apply EMA filter first
+        filtered_depth = self.apply_ema_filter(depth_map)
+        
+        # Compute confidence map
+        confidence = self.compute_confidence(filtered_depth)
+        
+        # For low-confidence regions, apply additional spatial filtering
+        low_confidence_mask = confidence < self.confidence_threshold
+        if np.any(low_confidence_mask):
+            filtered_depth[low_confidence_mask] = cv2.medianBlur(
+                filtered_depth.astype(np.float32), 5
+            )[low_confidence_mask]
+        
+        return filtered_depth 
+
+class EMADepthFilter:
+    """
+    Exponential Moving Average filter for depth map stabilization.
+    Provides temporal smoothing with minimal latency.
+    """
+    def __init__(self, alpha: float = 0.2):
+        """
+        Initialize EMA filter.
+        
+        Args:
+            alpha (float): Smoothing factor (0-1). Lower values mean more smoothing.
+                0.2 gives 20% weight to new values, 80% to history.
+        """
+        self.alpha = alpha
+        self.previous_depth = None
+    
+    def filter(self, depth_map: np.ndarray) -> np.ndarray:
+        """
+        Apply EMA filtering to depth map.
+        
+        Args:
+            depth_map (np.ndarray): Current depth map
+            
+        Returns:
+            np.ndarray: Filtered depth map
+        """
+        # Initialize on first frame
+        if self.previous_depth is None:
+            self.previous_depth = depth_map.copy()
+            return depth_map
+        
+        # Apply EMA formula: y(t) = α * x(t) + (1-α) * y(t-1)
+        filtered_depth = (self.alpha * depth_map + 
+                        (1 - self.alpha) * self.previous_depth)
+        
+        # Update previous depth
+        self.previous_depth = filtered_depth.copy()
+        
+        return filtered_depth 
