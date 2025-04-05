@@ -107,13 +107,25 @@ def main():
             # nearest_clusters = find_nearest_clusters(depth_map, num_clusters=3)
             
             # Add metric distance information if available
-            if metric_depth is not None:
-                x, y = nearest_point['position']
+            if metric_depth is not None and 'position' in nearest_point:
+                pos = nearest_point['position']
+            if isinstance(pos, (tuple, list)) and len(pos) == 2:
+                x, y = pos
                 nearest_point['distance'] = metric_depth[y, x]
-                
+
                 # Print nearest point info every 30 frames (adjust as needed)
-                if frame_count % 30 == 0:
-                    print(f"Nearest point: {nearest_point['distance']:.2f}m at position {x}, {y}")
+            if frame_count % 30 == 0:
+                print(f"Nearest point: {nearest_point['distance']:.2f}m at position {x}, {y}")
+            else:
+                print(f"[Warning] nearest_point['position'] is invalid: {pos}")
+
+            # if metric_depth is not None:
+            #     x, y = nearest_point['position']
+            #     nearest_point['distance'] = metric_depth[y, x]
+                
+            #     # Print nearest point info every 30 frames (adjust as needed)
+            #     if frame_count % 30 == 0:
+            #         print(f"Nearest point: {nearest_point['distance']:.2f}m at position {x}, {y}")
             
             # Get depth at center point for tracking
             h, w = depth_map.shape

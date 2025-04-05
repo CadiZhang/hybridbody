@@ -16,6 +16,7 @@ import os
 import torch
 import cv2
 import numpy as np
+import traceback
 from typing import Tuple
 from pathlib import Path
 
@@ -54,6 +55,8 @@ class DepthEstimator:
         sys.path.append(str(Path("models").resolve()))
 
         from midas.load_model import load_model
+        from midas.transforms import Resize, NormalizeImage, PrepareForNet
+        from torchvision.transforms import Compose
 
         model, transform, net_w, net_h = load_model(
             model_path=self.model_path,
@@ -61,6 +64,21 @@ class DepthEstimator:
             optimize=False,
             device=self.device,
         )
+
+        # net_w, net_h = 256, 256
+
+        # transform = Compose([
+        #     Resize(
+        #         net_w, net_h,
+        #         resize_target = None, 
+        #         keep_aspect_ratio=False,
+        #         ensure_multiple_of = 1,
+        #         resize_method="minimal"
+        #     ),
+        #     NormalizeImage(mean = [0.5,0.5,0.5], std=[0.5,0.5,0.5]),
+        #     PrepareForNet()
+        # ])
+
         return model, transform, net_w, net_h
 
 
@@ -95,8 +113,13 @@ class DepthEstimator:
             img_input = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) / 255.0
             sample = {"image": img_input}
             sample = self.transform(sample)
-            image = sample["image"].unsqueeze(0).to(self.device)
 
+            image = sample["image"]
+            if isinstance(image, np.ndarray):
+                image = torch.from_numpy(image).float()
+
+            image = image.unsqueeze(0).to(self.device)
+            
             with torch.no_grad():
                 prediction = self.model(image)
 
@@ -112,9 +135,11 @@ class DepthEstimator:
 
         except Exception as e:
             print(f"Error during depth estimation: {e}")
+            traceback.print_exc()
             h, w = original_size
             depth_map = np.zeros((h, w), dtype=np.float32)
             metric_depth = np.zeros_like(depth_map)
+        print(f"[DEBUG] Returning from estimate_depth: type(depth_map)={type(depth_map)}, type(metric_depth)={type(metric_depth)}")
 
         return depth_map, metric_depth
 
