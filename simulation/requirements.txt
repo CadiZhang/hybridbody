@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 # Core dependencies
 opencv-python>=4.5.0  # Computer vision library for camera capture
 numpy>=1.20.0         # Numerical operations
@@ -9,3 +10,12 @@ einops>=0.4.1         # Tensor operations - required by MiDaS
 # Optional dependencies
 panda3d>=1.10.0       # For 3D visualization (optional)
 matplotlib>=3.4.0     # For plotting and visualization 
+=======
+opencv-python
+torch
+torchvision
+numpy
+scikit-learn
+pyserial
+panda3d
+>>>>>>> Stashed changes
