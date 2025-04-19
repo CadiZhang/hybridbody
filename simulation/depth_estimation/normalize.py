@@ -110,7 +110,7 @@ def depth_to_distance(depth_map: np.ndarray, scale_factor: float = 3.0,
     return metric_depth
 
 def clamp_depth_range(depth_map: np.ndarray, 
-                     min_depth: float = 0.5,
+                     min_depth: float = 0.0,
                      max_depth: float = 3.0) -> np.ndarray:
     """
     Clamp depth values to a realistic range based on physical constraints.

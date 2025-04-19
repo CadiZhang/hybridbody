@@ -96,12 +96,55 @@ def main():
             
             # Perform depth estimation
             depth_map, metric_depth = depth_estimator.estimate_depth(frame)
+
+
+
             
             # Find the nearest point (for diagnostic purposes)
             nearest_point = find_nearest_point(depth_map, 
                                               min_region_size=50,
                                               ignore_margin_percent=0.1,
                                               use_region_averaging=True)
+            
+            # === PROXIMITY BAR VISUALIZATION ===
+            num_segments = 10
+            max_distance = 5.0  # meters (anything beyond this = not urgent)
+            bar_width = 60
+            bar_height = 300
+            segment_height = bar_height // num_segments
+
+            # Get metric distance from nearest point
+            x, y = nearest_point['position']
+            distance = metric_depth[y, x] if metric_depth is not None else None
+            nearest_point['distance'] = distance  # Update in case it's used elsewhere
+
+            # Compute how many segments to fill
+            if distance is None or distance > max_distance:
+                fill_segments = 0
+            else:
+                fill_ratio = 1.0 - (distance / max_distance)
+                fill_segments = int(fill_ratio * num_segments)
+                fill_segments = min(num_segments, max(0, fill_segments))
+
+            # Create the bar
+            bar = np.ones((bar_height, bar_width, 3), dtype=np.uint8) * 50
+
+            for i in range(fill_segments):
+                y1 = bar_height - (i + 1) * segment_height
+                y2 = y1 + segment_height
+                cv2.rectangle(bar, (0, y1), (bar_width, y2), (0, 0, 255), -1)  # red fill
+
+            # Outline all segments
+            for i in range(num_segments):
+                y1 = bar_height - (i + 1) * segment_height
+                y2 = y1 + segment_height
+                cv2.rectangle(bar, (0, y1), (bar_width, y2), (255, 255, 255), 1)
+
+            # Show the bar
+            cv2.imshow("Proximity Bar", bar)
+
+
+
             
             # Optionally, find multiple nearest clusters
             # nearest_clusters = find_nearest_clusters(depth_map, num_clusters=3)
@@ -110,6 +153,8 @@ def main():
             if metric_depth is not None:
                 x, y = nearest_point['position']
                 nearest_point['distance'] = metric_depth[y, x]
+                print(f"[DEBUG] Nearest normalized value: {nearest_point['value']:.3f}")
+                print(f"[DEBUG] Nearest metric value (meters?): {metric_depth[y, x]:.3f}")
                 
                 # Print nearest point info every 30 frames (adjust as needed)
                 if frame_count % 30 == 0:
