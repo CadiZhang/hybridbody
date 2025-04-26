@@ -9,8 +9,7 @@ This is the main entry point for the blind navigation system. It:
 5. (Future) Provides directional feedback
 
 Usage:
-    python main.py --display  # Run with visual display
-    python main.py --camera 1 --width 1280 --height 720  # Use external camera at HD resolution
+    python main.py --display --view overlay --debug # Run with visual display and promximity bar
 """
 # run "python main.py --display" to see the camera feed
 
@@ -20,11 +19,15 @@ import time      # For timing and FPS control
 import os        # For directory operations
 import numpy as np  # For numerical operations
 from utils.depth_analysis import find_nearest_point, find_nearest_clusters, mark_nearest_point
+from utils.config import (PROXIMITY_BAR_WIDTH, PROXIMITY_BAR_HEIGHT, 
+                         PROXIMITY_MIN_DISTANCE, PROXIMITY_MAX_DISTANCE,
+                         PROXIMITY_SEGMENTS, PROXIMITY_HAPTIC_MIN, PROXIMITY_HAPTIC_MAX)
 
 # Create necessary directories if they don't exist
 os.makedirs("camera", exist_ok=True)
 os.makedirs("utils", exist_ok=True)
 os.makedirs("depth_estimation", exist_ok=True)
+os.makedirs("visualization", exist_ok=True)
 
 def main():
     """
@@ -53,6 +56,8 @@ def main():
                         help="Visualization mode when --display is used")
     parser.add_argument("--calibrate", action="store_true", 
                         help="Enter calibration mode")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable debug output")
     
     # Parse the arguments
     args = parser.parse_args()
@@ -72,15 +77,35 @@ def main():
     from depth_estimation import DepthEstimator
     depth_estimator = DepthEstimator()
     
+    # Initialize the proximity bar
+    from visualization.proximity_bar import ProximityBar
+    proximity_bar = ProximityBar(
+        width=PROXIMITY_BAR_WIDTH,
+        height=PROXIMITY_BAR_HEIGHT,
+        min_distance=PROXIMITY_MIN_DISTANCE,
+        max_distance=PROXIMITY_MAX_DISTANCE,
+        segments=PROXIMITY_SEGMENTS
+    )
+    
+    # Initialize tracking variables
+    last_haptic_time = 0  # To avoid spamming haptic messages
+    haptic_cooldown = 1.0  # Seconds between haptic messages
+    
     # Add tracking for depth values at center point
     depth_values = []  # Store recent depth values for plotting
     max_tracked_frames = 30  # Track last 30 frames
     
-    # Initialize frame counter
+    # Initialize frame counter and performance metrics
     frame_count = 0
+    avg_depth_time = 0.0
+    alpha = 0.1  # Smoothing factor for moving average
     
     try:
         calibration_mode = False
+        # Track which frames to process for depth
+        last_depth_map = None
+        last_metric_depth = None
+        
         while True:
             # Record the start time for FPS calculation
             start_time = time.time()
@@ -95,68 +120,65 @@ def main():
             frame_count += 1
             
             # Perform depth estimation
-            depth_map, metric_depth = depth_estimator.estimate_depth(frame)
-
-
-
+            # Process either when we don't have a previous frame or on every other frame
+            if last_depth_map is None or frame_count % 2 == 0:
+                depth_start = time.time()
+                depth_map, metric_depth = depth_estimator.estimate_depth(frame)
+                depth_end = time.time()
+                
+                # Update performance metrics with moving average
+                elapsed = depth_end - depth_start
+                avg_depth_time = alpha * elapsed + (1.0 - alpha) * avg_depth_time
+                
+                # Periodically show depth estimation performance
+                if frame_count % 60 == 0 and avg_depth_time > 0:
+                    depth_fps = 1.0 / avg_depth_time
+                    print(f"Depth estimation: {depth_fps:.1f} FPS")
+                
+                # Save this frame's depth for reuse in skipped frames
+                last_depth_map = depth_map
+                last_metric_depth = metric_depth
+            else:
+                # Reuse the previous depth map for skipped frames
+                depth_map = last_depth_map
+                metric_depth = last_metric_depth
             
-            # Find the nearest point (for diagnostic purposes)
+            # Skip processing if no depth map is available (shouldn't happen with improved handling)
+            if depth_map is None or metric_depth is None:
+                continue
+                
+            # Find the nearest point
             nearest_point = find_nearest_point(depth_map, 
                                               min_region_size=50,
                                               ignore_margin_percent=0.1,
                                               use_region_averaging=True)
             
-            # === PROXIMITY BAR VISUALIZATION ===
-            num_segments = 10
-            max_distance = 5.0  # meters (anything beyond this = not urgent)
-            bar_width = 60
-            bar_height = 300
-            segment_height = bar_height // num_segments
-
             # Get metric distance from nearest point
             x, y = nearest_point['position']
             distance = metric_depth[y, x] if metric_depth is not None else None
             nearest_point['distance'] = distance  # Update in case it's used elsewhere
-
-            # Compute how many segments to fill
-            if distance is None or distance > max_distance:
-                fill_segments = 0
-            else:
-                fill_ratio = 1.0 - (distance / max_distance)
-                fill_segments = int(fill_ratio * num_segments)
-                fill_segments = min(num_segments, max(0, fill_segments))
-
-            # Create the bar
-            bar = np.ones((bar_height, bar_width, 3), dtype=np.uint8) * 50
-
-            for i in range(fill_segments):
-                y1 = bar_height - (i + 1) * segment_height
-                y2 = y1 + segment_height
-                cv2.rectangle(bar, (0, y1), (bar_width, y2), (0, 0, 255), -1)  # red fill
-
-            # Outline all segments
-            for i in range(num_segments):
-                y1 = bar_height - (i + 1) * segment_height
-                y2 = y1 + segment_height
-                cv2.rectangle(bar, (0, y1), (bar_width, y2), (255, 255, 255), 1)
-
-            # Show the bar
-            cv2.imshow("Proximity Bar", bar)
-
-
-
             
-            # Optionally, find multiple nearest clusters
-            # nearest_clusters = find_nearest_clusters(depth_map, num_clusters=3)
-            
-            # Add metric distance information if available
-            if metric_depth is not None:
-                x, y = nearest_point['position']
-                nearest_point['distance'] = metric_depth[y, x]
-                print(f"[DEBUG] Nearest normalized value: {nearest_point['value']:.3f}")
-                print(f"[DEBUG] Nearest metric value (meters?): {metric_depth[y, x]:.3f}")
+            # Update proximity bar and check for haptic feedback
+            if distance is not None:
+                haptic_triggered = proximity_bar.update(distance)
                 
-                # Print nearest point info every 30 frames (adjust as needed)
+                # Print haptic feedback message with cooldown
+                current_time = time.time()
+                if haptic_triggered and (current_time - last_haptic_time) > haptic_cooldown:
+                    print("haptic feedback invoked")
+                    last_haptic_time = current_time
+                
+                # Render the proximity bar
+                bar_image = proximity_bar.render()
+                print("Rendering proximity bar window")
+                cv2.imshow("Proximity Bar", bar_image)
+            
+            # Only print debug information if debug flag is set
+            if args.debug and metric_depth is not None:
+                print(f"[DEBUG] Nearest normalized value: {nearest_point['value']:.3f}")
+                print(f"[DEBUG] Nearest metric value (meters): {metric_depth[y, x]:.3f}")
+                
+                # Print nearest point info every 30 frames
                 if frame_count % 30 == 0:
                     print(f"Nearest point: {nearest_point['distance']:.2f}m at position {x}, {y}")
             
@@ -181,6 +203,7 @@ def main():
                     # Create overlay of depth on RGB
                     from depth_estimation.normalize import create_depth_overlay
                     display_frame = create_depth_overlay(frame, depth_colored, alpha=0.6)
+                    print("Created depth overlay")
                 elif args.view == "side-by-side":
                     # Create side-by-side view
                     display_frame = np.hstack((frame, depth_colored))
@@ -188,52 +211,12 @@ def main():
                 # Mark the nearest point on the display frame
                 display_frame = mark_nearest_point(display_frame, nearest_point)
                 
-                # Draw depth value graph
-                if len(depth_values) > 1:
-                    graph_h = 100  # Graph height
-                    graph_w = 200  # Graph width
-                    graph = np.ones((graph_h, graph_w, 3), dtype=np.uint8) * 255
-                    
-                    # Scale values to fit graph
-                    min_d = min(depth_values)
-                    max_d = max(depth_values)
-                    if max_d > min_d:
-                        scaled_values = [int(graph_h - (d - min_d) * graph_h / (max_d - min_d)) 
-                                      for d in depth_values]
-                        
-                        # Draw lines connecting points
-                        for i in range(len(scaled_values)-1):
-                            pt1 = (i * graph_w // max_tracked_frames, scaled_values[i])
-                            pt2 = ((i+1) * graph_w // max_tracked_frames, scaled_values[i+1])
-                            cv2.line(graph, pt1, pt2, (0, 0, 255), 2)
-                    
-                    # Add graph to corner of display
-                    display_frame[20:20+graph_h, 20:20+graph_w] = graph
-                
-                # Add current depth value text
-                cv2.putText(display_frame, 
-                          f"Center Depth: {center_depth:.2f}m",
-                          (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                
-                # Handle calibration mode
-                if calibration_mode:
-                    cv2.putText(display_frame, 
-                              "CALIBRATION MODE - Enter distance in meters (0-9):",
-                              (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(display_frame, 
-                              f"Current center depth: {center_depth:.3f}",
-                              (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                else:
-                    cv2.putText(display_frame, 
-                              f"Depth: {metric_depth[h//2, w//2]:.2f}m (press 'c' for calibration)",
-                              (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
                 # Show the visualization
                 cv2.imshow("Blind Navigation System", display_frame)
                 
                 # Get key press and add debug print
                 key = cv2.waitKey(1) & 0xFF
-                if key != 255:  # If any key was pressed
+                if key != 255 and args.debug:  # If any key was pressed and debug is enabled
                     print(f"Key pressed: {chr(key) if key < 128 else key}")
                 
                 # Handle key presses
@@ -258,15 +241,6 @@ def main():
                     depth_estimator.calibrate(known_distance=distance, depth_value=center_depth)
                     print(f"Calibrated with distance {distance}m")
                     calibration_mode = False
-            
-            # === Future: Add obstacle detection here ===
-            # obstacles = obstacle_detector.detect(metric_depth)
-            
-            # === Future: Add directional mapping here ===
-            # directions = mapper.map_to_sectors(obstacles)
-            
-            # === Future: Add feedback generation here ===
-            # feedback.generate(directions)
             
             # Control the frame rate
             elapsed = time.time() - start_time

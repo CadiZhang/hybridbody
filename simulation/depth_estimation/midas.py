@@ -47,18 +47,18 @@ class DepthEstimator:
         print(f"Loading MiDaS model: {model_type}")
         self.model = self._load_model()
         
-        # Set input size based on model
-        self.input_width = 256
-        self.input_height = 256
+        # Reduce input size for better performance
+        self.input_width = 256  # Keep dimensions as multiples of 32 for deep learning models
+        self.input_height = 192  # Keep dimensions as multiples of 32 for deep learning models
         
         # Initialize depth scaling parameters with safer thresholds
         self.depth_scale_factor = 3.0
-        self.depth_min = 0.5  # Changed to 0.5m (50cm) for safety
-        self.depth_max = 10.0  # Keep max at 10m
+        self.depth_min = 0.5  # Minimum depth 0.5m
+        self.depth_max = 5.0  # Maximum depth 5.0m
         
-        # Add EMA filter
+        # Add EMA filter with reduced smoothing for lower latency
         from .normalize import EMADepthFilter
-        self.depth_filter = EMADepthFilter(alpha=0.2)
+        self.depth_filter = EMADepthFilter(alpha=0.4)  # Increased alpha for less smoothing
         
         # Load calibration if exists
         self.calibration_file = "calibration.json"
