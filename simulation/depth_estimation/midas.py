@@ -51,10 +51,11 @@ class DepthEstimator:
         self.input_width = 256  # Keep dimensions as multiples of 32 for deep learning models
         self.input_height = 192  # Keep dimensions as multiples of 32 for deep learning models
         
-        # Initialize inverse depth model parameters with better mid-range values
-        self.alpha = 3.0  # Increased from 2.0 to make mid-range values higher
-        self.beta = 2.5   # Decreased from 3.0 to make far values more accurate
-        self.gamma = 0.05 # Slightly increased to adjust the curve
+        # Initialize inverse depth model parameters with improved values
+        self.alpha = 4.0    # Increased from 3.5 to make mid/far values higher
+        self.beta = 2.0     # Decreased from 2.5 to increase values in mid-range 
+        self.gamma = 0.05   # Keep as is
+        self.offset = -0.7  # Keep as is
         
         # Initialize depth scaling parameters with safer thresholds
         self.depth_scale_factor = 3.0  # Keep for backward compatibility
@@ -167,7 +168,8 @@ class DepthEstimator:
                         self.alpha = data['alpha']
                         self.beta = data['beta']
                         self.gamma = data['gamma']
-                        print(f"Loaded calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}")
+                        self.offset = data.get('offset', -0.3)  # Default to -0.3 if not present
+                        print(f"Loaded calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}, offset={self.offset}")
                     
                     # Load calibration points if present
                     if 'calibration_points' in data:
@@ -186,10 +188,11 @@ class DepthEstimator:
                     'alpha': self.alpha,
                     'beta': self.beta,
                     'gamma': self.gamma,
+                    'offset': self.offset,
                     'calibration_points': self.calibration_points
                 }
                 json.dump(data, f)
-                print(f"Saved calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}")
+                print(f"Saved calibration parameters: alpha={self.alpha:.2f}, beta={self.beta:.2f}, gamma={self.gamma:.2f}, offset={self.offset:.2f}")
         except Exception as e:
             print(f"Could not save calibration: {e}")
 
@@ -257,8 +260,8 @@ class DepthEstimator:
             print(f"Error updating calibration parameters: {e}")
             print("Falling back to default parameters")
             # Reset to sensible defaults
-            self.alpha = 3.5
-            self.beta = 2.5
+            self.alpha = 4.0
+            self.beta = 2.0
             self.gamma = 0.05
 
     def calibrate(self, known_distance: float, depth_value: float):
@@ -298,15 +301,17 @@ class DepthEstimator:
             from .normalize import depth_to_metric_inverse
             
             # Use calibrated parameters or defaults
-            alpha = getattr(self, 'alpha', 3.5)
-            beta = getattr(self, 'beta', 2.5)
+            alpha = getattr(self, 'alpha', 4.0)
+            beta = getattr(self, 'beta', 2.0)
             gamma = getattr(self, 'gamma', 0.05)
+            offset = getattr(self, 'offset', -0.7)
             
             metric_depth = depth_to_metric_inverse(
                 depth_map,
                 alpha=alpha,
                 beta=beta,
                 gamma=gamma,
+                offset=offset,
                 min_depth=self.depth_min,
                 max_depth=self.depth_max
             )
@@ -381,7 +386,7 @@ class DepthEstimator:
             depth_values = np.linspace(0, 1, 100)
             
             # Calculate corresponding distances using current parameters
-            distances = self.alpha / (self.beta * (1.0 - depth_values) + self.gamma)
+            distances = self.alpha / (self.beta * (1.0 - depth_values) + self.gamma) + self.offset
             
             # Create the plot
             plt.figure(figsize=(10, 6))
@@ -395,7 +400,7 @@ class DepthEstimator:
             
             # Mark key depths with vertical lines
             for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
-                dist = self.alpha / (self.beta * (1.0 - d) + self.gamma)
+                dist = self.alpha / (self.beta * (1.0 - d) + self.gamma) + self.offset
                 plt.axvline(x=d, color='gray', linestyle='--', alpha=0.5)
                 plt.text(d+0.01, 0.5, f"{d:.1f} → {dist:.2f}m", rotation=90, verticalalignment='center')
             
@@ -407,13 +412,13 @@ class DepthEstimator:
             plt.ylim(0, 6)
             
             # Add formula and parameters
-            formula = f"distance = {self.alpha:.2f} / ({self.beta:.2f} * (1 - depth) + {self.gamma:.2f})"
+            formula = f"distance = {self.alpha:.2f} / ({self.beta:.2f} * (1 - depth) + {self.gamma:.2f}) + {self.offset:.2f}"
             plt.figtext(0.5, 0.01, formula, ha='center', fontsize=12)
             
             # Show the plot
             plt.tight_layout()
             plt.savefig('calibration_curve.png')
-            print("Calibration visualization saved to 'calibration_curve.png'")
+            print(f"Calibration visualization saved to 'calibration_curve.png'")
             
         except ImportError:
             print("Matplotlib is required for visualization") 

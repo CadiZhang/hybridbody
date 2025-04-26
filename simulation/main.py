@@ -30,18 +30,19 @@ os.makedirs("depth_estimation", exist_ok=True)
 os.makedirs("visualization", exist_ok=True)
 
 # Define the adjust_parameters function outside the main loop
-def adjust_parameters(estimator, alpha_delta=0, beta_delta=0, gamma_delta=0):
+def adjust_parameters(estimator, alpha_delta=0, beta_delta=0, gamma_delta=0, offset_delta=0):
     """Manually adjust calibration parameters"""
     estimator.alpha = max(0.1, estimator.alpha + alpha_delta)
     estimator.beta = max(0.1, estimator.beta + beta_delta)
     estimator.gamma = max(0.01, estimator.gamma + gamma_delta)
-    print(f"Adjusted parameters: alpha={estimator.alpha:.2f}, beta={estimator.beta:.2f}, gamma={estimator.gamma:.2f}")
+    estimator.offset = estimator.offset + offset_delta
+    print(f"Adjusted parameters: alpha={estimator.alpha:.2f}, beta={estimator.beta:.2f}, gamma={estimator.gamma:.2f}, offset={estimator.offset:.2f}")
     estimator.save_calibration()
     
     # Show predicted distances at key depths
     print("Predicted distances:")
     for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
-        dist = estimator.alpha / (estimator.beta * (1.0 - d) + estimator.gamma)
+        dist = estimator.alpha / (estimator.beta * (1.0 - d) + estimator.gamma) + estimator.offset
         print(f"  depth={d:.1f} → distance={dist:.2f}m")
 
 def main():
@@ -248,9 +249,10 @@ def main():
                     print(f"View mode changed to: {args.view}")
                 elif key == ord('r'):
                     print("Resetting calibration to defaults...")
-                    depth_estimator.alpha = 3.0  # Updated to our new defaults
-                    depth_estimator.beta = 2.5
-                    depth_estimator.gamma = 0.05
+                    depth_estimator.alpha = 4.0    # Increased from 3.5
+                    depth_estimator.beta = 2.0     # Decreased from 2.5
+                    depth_estimator.gamma = 0.05   # Keep as is
+                    depth_estimator.offset = -0.7  # Keep as is
                     depth_estimator.calibration_points = []
                     depth_estimator.save_calibration()
                     print("Calibration reset complete.")
@@ -270,6 +272,10 @@ def main():
                     adjust_parameters(depth_estimator, gamma_delta=0.01)
                 elif key == ord('f'):  # Decrease gamma (changed from 'c' to avoid conflict)
                     adjust_parameters(depth_estimator, gamma_delta=-0.01)
+                elif key == ord('g'):  # Increase offset (move curve up)
+                    adjust_parameters(depth_estimator, offset_delta=0.1)
+                elif key == ord('b'):  # Decrease offset (move curve down)
+                    adjust_parameters(depth_estimator, offset_delta=-0.1)
                 
                 # Handle calibration number input
                 if calibration_mode and ord('0') <= key <= ord('9'):

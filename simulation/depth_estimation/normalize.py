@@ -118,19 +118,21 @@ def clamp_depth_range(depth_map: np.ndarray,
     return np.clip(depth_map, min_depth, max_depth)
 
 def depth_to_metric_inverse(depth_map: np.ndarray, 
-                           alpha: float = 2.0,
-                           beta: float = 3.0,
-                           gamma: float = 0.1,
+                           alpha: float = 3.5, 
+                           beta: float = 2.5, 
+                           gamma: float = 0.05,
+                           offset: float = -0.3,  # Add offset parameter
                            min_depth: float = 0.5,
                            max_depth: float = 5.0) -> np.ndarray:
     """
-    Convert normalized depth to metric using inverse relationship.
+    Convert normalized depth to metric using inverse relationship with offset.
     
-    metric_depth = alpha / (beta * (1 - depth_map) + gamma)
+    metric_depth = alpha / (beta * (1 - depth_map) + gamma) + offset
     
     Args:
         depth_map: Normalized depth map (0-1 range, 1=closest)
         alpha, beta, gamma: Parameters determined by calibration
+        offset: Vertical shift (negative values lower the curve)
         min_depth: Minimum depth in meters
         max_depth: Maximum depth in meters
         
@@ -140,8 +142,8 @@ def depth_to_metric_inverse(depth_map: np.ndarray,
     # Ensure depth is properly normalized
     depth_map = np.clip(depth_map, 0.0, 1.0)
     
-    # Apply inverse transformation (avoid division by zero with gamma)
-    metric_depth = alpha / (beta * (1.0 - depth_map) + gamma)
+    # Apply inverse transformation with offset
+    metric_depth = alpha / (beta * (1.0 - depth_map) + gamma) + offset
     
     # Clamp to min/max range for safety
     metric_depth = np.clip(metric_depth, min_depth, max_depth)
