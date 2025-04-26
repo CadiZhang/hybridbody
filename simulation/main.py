@@ -29,6 +29,21 @@ os.makedirs("utils", exist_ok=True)
 os.makedirs("depth_estimation", exist_ok=True)
 os.makedirs("visualization", exist_ok=True)
 
+# Define the adjust_parameters function outside the main loop
+def adjust_parameters(estimator, alpha_delta=0, beta_delta=0, gamma_delta=0):
+    """Manually adjust calibration parameters"""
+    estimator.alpha = max(0.1, estimator.alpha + alpha_delta)
+    estimator.beta = max(0.1, estimator.beta + beta_delta)
+    estimator.gamma = max(0.01, estimator.gamma + gamma_delta)
+    print(f"Adjusted parameters: alpha={estimator.alpha:.2f}, beta={estimator.beta:.2f}, gamma={estimator.gamma:.2f}")
+    estimator.save_calibration()
+    
+    # Show predicted distances at key depths
+    print("Predicted distances:")
+    for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
+        dist = estimator.alpha / (estimator.beta * (1.0 - d) + estimator.gamma)
+        print(f"  depth={d:.1f} → distance={dist:.2f}m")
+
 def main():
     """
     Main function that runs the blind navigation system.
@@ -231,6 +246,30 @@ def main():
                     current_idx = views.index(args.view)
                     args.view = views[(current_idx + 1) % len(views)]
                     print(f"View mode changed to: {args.view}")
+                elif key == ord('r'):
+                    print("Resetting calibration to defaults...")
+                    depth_estimator.alpha = 3.0  # Updated to our new defaults
+                    depth_estimator.beta = 2.5
+                    depth_estimator.gamma = 0.05
+                    depth_estimator.calibration_points = []
+                    depth_estimator.save_calibration()
+                    print("Calibration reset complete.")
+                elif key == ord('p'):  # 'p' for plot
+                    print("Generating calibration visualization...")
+                    depth_estimator.visualize_calibration()
+                    print("Calibration visualization saved.")
+                elif key == ord('a'):  # Increase alpha
+                    adjust_parameters(depth_estimator, alpha_delta=0.1)
+                elif key == ord('z'):  # Decrease alpha
+                    adjust_parameters(depth_estimator, alpha_delta=-0.1)
+                elif key == ord('s'):  # Increase beta
+                    adjust_parameters(depth_estimator, beta_delta=0.1)
+                elif key == ord('x'):  # Decrease beta
+                    adjust_parameters(depth_estimator, beta_delta=-0.1)
+                elif key == ord('d'):  # Increase gamma
+                    adjust_parameters(depth_estimator, gamma_delta=0.01)
+                elif key == ord('f'):  # Decrease gamma (changed from 'c' to avoid conflict)
+                    adjust_parameters(depth_estimator, gamma_delta=-0.01)
                 
                 # Handle calibration number input
                 if calibration_mode and ord('0') <= key <= ord('9'):
@@ -238,9 +277,16 @@ def main():
                     print(f"Calibrating for distance: {distance}m")
                     h, w = depth_map.shape
                     center_depth = depth_map[h//2, w//2]
-                    depth_estimator.calibrate(known_distance=distance, depth_value=center_depth)
-                    print(f"Calibrated with distance {distance}m")
-                    calibration_mode = False
+                    
+                    # Use new multi-point calibration
+                    depth_estimator.add_calibration_point(known_distance=distance, depth_value=center_depth)
+                    
+                    # Check if we need more calibration points
+                    if len(depth_estimator.calibration_points) < 3:
+                        print(f"Added calibration point at {distance}m. Need {3 - len(depth_estimator.calibration_points)} more points.")
+                    else:
+                        print("Calibration complete with multiple points.")
+                        calibration_mode = False
             
             # Control the frame rate
             elapsed = time.time() - start_time

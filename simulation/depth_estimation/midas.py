@@ -51,14 +51,22 @@ class DepthEstimator:
         self.input_width = 256  # Keep dimensions as multiples of 32 for deep learning models
         self.input_height = 192  # Keep dimensions as multiples of 32 for deep learning models
         
+        # Initialize inverse depth model parameters with better mid-range values
+        self.alpha = 3.0  # Increased from 2.0 to make mid-range values higher
+        self.beta = 2.5   # Decreased from 3.0 to make far values more accurate
+        self.gamma = 0.05 # Slightly increased to adjust the curve
+        
         # Initialize depth scaling parameters with safer thresholds
-        self.depth_scale_factor = 3.0
+        self.depth_scale_factor = 3.0  # Keep for backward compatibility
         self.depth_min = 0.5  # Minimum depth 0.5m
         self.depth_max = 5.0  # Maximum depth 5.0m
         
         # Add EMA filter with reduced smoothing for lower latency
         from .normalize import EMADepthFilter
         self.depth_filter = EMADepthFilter(alpha=0.4)  # Increased alpha for less smoothing
+        
+        # Calibration data
+        self.calibration_points = []  # List of (depth_value, actual_distance) tuples
         
         # Load calibration if exists
         self.calibration_file = "calibration.json"
@@ -148,8 +156,23 @@ class DepthEstimator:
             if os.path.exists(self.calibration_file):
                 with open(self.calibration_file, 'r') as f:
                     data = json.load(f)
-                    self.depth_scale_factor = data['scale_factor']
-                    print(f"Loaded calibration: scale_factor = {self.depth_scale_factor}")
+                    
+                    # Load legacy scale_factor if present
+                    if 'scale_factor' in data:
+                        self.depth_scale_factor = data['scale_factor']
+                        print(f"Loaded legacy calibration: scale_factor = {self.depth_scale_factor}")
+                    
+                    # Load inverse model parameters if present
+                    if all(key in data for key in ['alpha', 'beta', 'gamma']):
+                        self.alpha = data['alpha']
+                        self.beta = data['beta']
+                        self.gamma = data['gamma']
+                        print(f"Loaded calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}")
+                    
+                    # Load calibration points if present
+                    if 'calibration_points' in data:
+                        self.calibration_points = data['calibration_points']
+                        print(f"Loaded {len(self.calibration_points)} calibration points")
         except Exception as e:
             print(f"Could not load calibration: {e}")
 
@@ -158,20 +181,100 @@ class DepthEstimator:
         try:
             import json
             with open(self.calibration_file, 'w') as f:
-                json.dump({'scale_factor': self.depth_scale_factor}, f)
-                print(f"Saved calibration: scale_factor = {self.depth_scale_factor}")
+                data = {
+                    'scale_factor': self.depth_scale_factor,  # Keep for backward compatibility
+                    'alpha': self.alpha,
+                    'beta': self.beta,
+                    'gamma': self.gamma,
+                    'calibration_points': self.calibration_points
+                }
+                json.dump(data, f)
+                print(f"Saved calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}")
         except Exception as e:
             print(f"Could not save calibration: {e}")
 
+    def add_calibration_point(self, known_distance: float, depth_value: float):
+        """Add a calibration point and update parameters if enough points are available"""
+        self.calibration_points.append((depth_value, known_distance))
+        print(f"Added calibration point: depth={depth_value:.3f}, distance={known_distance}m")
+        
+        # Update parameters if we have enough points
+        if len(self.calibration_points) >= 3:
+            self.update_calibration_parameters()
+        
+        # Save calibration data
+        self.save_calibration()
+
+    def update_calibration_parameters(self):
+        """Update alpha, beta, gamma parameters using collected calibration points"""
+        if len(self.calibration_points) < 3:
+            print("Need at least 3 calibration points to fit the inverse model")
+            return
+        
+        try:
+            import scipy.optimize as optimize
+            
+            # Extract depth values and actual distances
+            depth_values = np.array([point[0] for point in self.calibration_points])
+            actual_distances = np.array([point[1] for point in self.calibration_points])
+            
+            # Print calibration points for debugging
+            print("Calibration points:")
+            for i, (depth, dist) in enumerate(zip(depth_values, actual_distances)):
+                print(f"  Point {i+1}: depth={depth:.3f}, distance={dist}m")
+            
+            # Define the inverse function to fit
+            def inverse_func(x, a, b, c):
+                return a / (b * (1.0 - x) + c)
+            
+            # Initial parameter guess (current values)
+            initial_guess = [self.alpha, self.beta, self.gamma]
+            
+            # Find optimal parameters with tighter bounds
+            params, _ = optimize.curve_fit(
+                inverse_func, depth_values, actual_distances,
+                p0=initial_guess,
+                bounds=([0.5, 0.5, 0.01], [10.0, 10.0, 0.5])  # More conservative bounds
+            )
+            
+            # Update parameters
+            self.alpha, self.beta, self.gamma = params
+            print(f"Updated calibration parameters: alpha={self.alpha:.3f}, beta={self.beta:.3f}, gamma={self.gamma:.3f}")
+            
+            # Compute and print mean absolute error
+            predicted = inverse_func(depth_values, *params)
+            mean_abs_error = np.mean(np.abs(predicted - actual_distances))
+            print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
+            
+            # Print test values for important ranges
+            test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
+            print("Predicted distances at test depths:")
+            for d in test_depths:
+                pred = inverse_func(d, *params)
+                print(f"  depth={d:.1f} → distance={pred:.2f}m")
+            
+        except Exception as e:
+            print(f"Error updating calibration parameters: {e}")
+            print("Falling back to default parameters")
+            # Reset to sensible defaults
+            self.alpha = 3.5
+            self.beta = 2.5
+            self.gamma = 0.05
+
     def calibrate(self, known_distance: float, depth_value: float):
-        """Calibrate depth scaling"""
+        """
+        Legacy calibration method - redirects to add_calibration_point
+        """
+        # Store the legacy scale factor for backward compatibility
         self.depth_scale_factor = known_distance / depth_value
-        print(f"Depth scale factor calibrated to: {self.depth_scale_factor:.3f}")
-        self.save_calibration()  # Save after calibration
+        print(f"Legacy depth scale factor: {self.depth_scale_factor:.3f}")
+        
+        # Add as a calibration point for the inverse model
+        self.add_calibration_point(known_distance, depth_value)
 
     def estimate_depth(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Estimate depth with EMA stabilization
+        Estimate depth with EMA stabilization and improved metric conversion
         """
         # Record original size
         original_size = frame.shape[:2]
@@ -190,9 +293,23 @@ class DepthEstimator:
             # Apply EMA filtering for stability
             depth_map = self.depth_filter.filter(depth_map)
             
-            # Convert to metric depth with safety threshold
-            metric_depth = depth_map * self.depth_scale_factor
-            metric_depth = np.clip(metric_depth, self.depth_min, self.depth_max)
+            # Convert to metric depth using inverse relationship model
+            # Import here to avoid circular import
+            from .normalize import depth_to_metric_inverse
+            
+            # Use calibrated parameters or defaults
+            alpha = getattr(self, 'alpha', 3.5)
+            beta = getattr(self, 'beta', 2.5)
+            gamma = getattr(self, 'gamma', 0.05)
+            
+            metric_depth = depth_to_metric_inverse(
+                depth_map,
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                min_depth=self.depth_min,
+                max_depth=self.depth_max
+            )
             
         except Exception as e:
             print(f"Error during depth estimation: {e}")
@@ -252,4 +369,51 @@ class DepthEstimator:
         filtered_depth = depth_map.copy()
         filtered_depth[~mask] = cv2.blur(depth_map, (5, 5))[~mask]
         
-        return filtered_depth 
+        return filtered_depth
+
+    def visualize_calibration(self):
+        """Create a visualization of the current depth-to-distance mapping"""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            # Create a range of depth values from 0 to 1
+            depth_values = np.linspace(0, 1, 100)
+            
+            # Calculate corresponding distances using current parameters
+            distances = self.alpha / (self.beta * (1.0 - depth_values) + self.gamma)
+            
+            # Create the plot
+            plt.figure(figsize=(10, 6))
+            plt.plot(depth_values, distances, 'b-', linewidth=2)
+            
+            # Plot the calibration points if available
+            if len(self.calibration_points) > 0:
+                calib_depths = [p[0] for p in self.calibration_points]
+                calib_dists = [p[1] for p in self.calibration_points]
+                plt.plot(calib_depths, calib_dists, 'ro', markersize=8, label='Calibration Points')
+            
+            # Mark key depths with vertical lines
+            for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
+                dist = self.alpha / (self.beta * (1.0 - d) + self.gamma)
+                plt.axvline(x=d, color='gray', linestyle='--', alpha=0.5)
+                plt.text(d+0.01, 0.5, f"{d:.1f} → {dist:.2f}m", rotation=90, verticalalignment='center')
+            
+            # Add labels and title
+            plt.xlabel('Normalized Depth')
+            plt.ylabel('Distance (meters)')
+            plt.title('Depth to Distance Mapping')
+            plt.grid(True)
+            plt.ylim(0, 6)
+            
+            # Add formula and parameters
+            formula = f"distance = {self.alpha:.2f} / ({self.beta:.2f} * (1 - depth) + {self.gamma:.2f})"
+            plt.figtext(0.5, 0.01, formula, ha='center', fontsize=12)
+            
+            # Show the plot
+            plt.tight_layout()
+            plt.savefig('calibration_curve.png')
+            print("Calibration visualization saved to 'calibration_curve.png'")
+            
+        except ImportError:
+            print("Matplotlib is required for visualization") 

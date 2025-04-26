@@ -110,12 +110,43 @@ def depth_to_distance(depth_map: np.ndarray, scale_factor: float = 3.0,
     return metric_depth
 
 def clamp_depth_range(depth_map: np.ndarray, 
-                     min_depth: float = 0.0,
+                     min_depth: float = 0.5,
                      max_depth: float = 3.0) -> np.ndarray:
     """
     Clamp depth values to a realistic range based on physical constraints.
     """
     return np.clip(depth_map, min_depth, max_depth)
+
+def depth_to_metric_inverse(depth_map: np.ndarray, 
+                           alpha: float = 2.0,
+                           beta: float = 3.0,
+                           gamma: float = 0.1,
+                           min_depth: float = 0.5,
+                           max_depth: float = 5.0) -> np.ndarray:
+    """
+    Convert normalized depth to metric using inverse relationship.
+    
+    metric_depth = alpha / (beta * (1 - depth_map) + gamma)
+    
+    Args:
+        depth_map: Normalized depth map (0-1 range, 1=closest)
+        alpha, beta, gamma: Parameters determined by calibration
+        min_depth: Minimum depth in meters
+        max_depth: Maximum depth in meters
+        
+    Returns:
+        Depth map in metric units (meters)
+    """
+    # Ensure depth is properly normalized
+    depth_map = np.clip(depth_map, 0.0, 1.0)
+    
+    # Apply inverse transformation (avoid division by zero with gamma)
+    metric_depth = alpha / (beta * (1.0 - depth_map) + gamma)
+    
+    # Clamp to min/max range for safety
+    metric_depth = np.clip(metric_depth, min_depth, max_depth)
+    
+    return metric_depth
 
 class DepthCalibrator:
     """
