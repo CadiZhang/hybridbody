@@ -62,10 +62,10 @@ class DepthEstimator:
         self.gamma = 0.05
         self.offset = -0.7
         
-        # Initialize depth scaling parameters with safer thresholds
+        # Initialize depth scaling parameters with updated thresholds
         self.depth_scale_factor = 3.0  # Keep for backward compatibility
         self.depth_min = 0.5  # Minimum depth 0.5m
-        self.depth_max = 5.0  # Maximum depth 5.0m
+        self.depth_max = 3.0  # Maximum depth 3.0m (was 5.0m)
         
         # Add EMA filter with reduced smoothing for lower latency
         from .normalize import EMADepthFilter
@@ -246,72 +246,32 @@ class DepthEstimator:
         for i, (depth, dist) in enumerate(zip(depth_values, actual_distances)):
             print(f"  Point {i+1}: depth={depth:.3f}, distance={dist}m")
         
-        if self.use_linear_mapping:
-            try:
-                # Simple linear regression
-                A = np.vstack([depth_values, np.ones_like(depth_values)]).T
-                self.slope, self.intercept = np.linalg.lstsq(A, actual_distances, rcond=None)[0]
-                print(f"Updated linear parameters: slope={self.slope:.3f}, intercept={self.intercept:.3f}")
+        # Set use_linear_mapping to True as we're standardizing on linear method
+        self.use_linear_mapping = True
+        
+        try:
+            # Simple linear regression
+            A = np.vstack([depth_values, np.ones_like(depth_values)]).T
+            self.slope, self.intercept = np.linalg.lstsq(A, actual_distances, rcond=None)[0]
+            print(f"Updated linear parameters: slope={self.slope:.3f}, intercept={self.intercept:.3f}")
+            
+            # Compute and print mean absolute error
+            predicted = self.slope * depth_values + self.intercept
+            mean_abs_error = np.mean(np.abs(predicted - actual_distances))
+            print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
+            
+            # Print test values for important ranges
+            test_depths = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
+            print("Predicted distances at test depths:")
+            for d in test_depths:
+                pred = self.slope * d + self.intercept
+                print(f"  depth={d:.2f} → distance={pred:.2f}m")
                 
-                # Compute and print mean absolute error
-                predicted = self.slope * depth_values + self.intercept
-                mean_abs_error = np.mean(np.abs(predicted - actual_distances))
-                print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
-                
-                # Print test values for important ranges
-                test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
-                print("Predicted distances at test depths:")
-                for d in test_depths:
-                    pred = self.slope * d + self.intercept
-                    print(f"  depth={d:.1f} → distance={pred:.2f}m")
-                    
-            except Exception as e:
-                print(f"Error updating linear parameters: {e}")
-                # Reset to sensible defaults
-                self.slope = 4.0
-                self.intercept = 0.5
-        else:
-            # Existing inverse function fitting code
-            try:
-                import scipy.optimize as optimize
-                
-                # Define the inverse function to fit
-                def inverse_func(x, a, b, c):
-                    return a / (b * (1.0 - x) + c)
-                
-                # Initial parameter guess (current values)
-                initial_guess = [self.alpha, self.beta, self.gamma]
-                
-                # Find optimal parameters with tighter bounds
-                params, _ = optimize.curve_fit(
-                    inverse_func, depth_values, actual_distances,
-                    p0=initial_guess,
-                    bounds=([0.5, 0.5, 0.01], [10.0, 10.0, 0.5])
-                )
-                
-                # Update parameters
-                self.alpha, self.beta, self.gamma = params
-                print(f"Updated inverse parameters: alpha={self.alpha:.3f}, beta={self.beta:.3f}, gamma={self.gamma:.3f}")
-                
-                # Compute and print mean absolute error
-                predicted = inverse_func(depth_values, *params)
-                mean_abs_error = np.mean(np.abs(predicted - actual_distances))
-                print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
-                
-                # Print test values for important ranges
-                test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
-                print("Predicted distances at test depths:")
-                for d in test_depths:
-                    pred = inverse_func(d, *params)
-                    print(f"  depth={d:.1f} → distance={pred:.2f}m")
-                
-            except Exception as e:
-                print(f"Error updating inverse parameters: {e}")
-                print("Falling back to default parameters")
-                # Reset to sensible defaults
-                self.alpha = 4.5
-                self.beta = 1.8
-                self.gamma = 0.05
+        except Exception as e:
+            print(f"Error updating linear parameters: {e}")
+            # Reset to sensible defaults
+            self.slope = 4.0
+            self.intercept = 0.5
 
     def calibrate(self, known_distance: float, depth_value: float):
         """

@@ -21,7 +21,7 @@ class AdvancedVisualization:
                 width: int = 800, 
                 height: int = 500,
                 min_distance: float = 0.5,
-                max_distance: float = 5.0):
+                max_distance: float = 3.0):
         """
         Initialize the advanced visualization.
         

@@ -115,12 +115,19 @@ def main():
     from depth_estimation import DepthEstimator
     depth_estimator = DepthEstimator()
     
-    # Initialize the advanced visualization (replacing proximity_bar and directional_pulse)
+    # Add calibration points from user measurements
+    # Clear existing points first to avoid mixing with old calibration
+    depth_estimator.calibration_points = []
+    depth_estimator.add_calibration_point(known_distance=0.5, depth_value=0.05)
+    depth_estimator.add_calibration_point(known_distance=1.0, depth_value=0.15)
+    depth_estimator.add_calibration_point(known_distance=2.0, depth_value=0.192)
+    
+    # Initialize the advanced visualization with 3m maximum
     advanced_vis = AdvancedVisualization(
         width=800,
         height=500,
-        min_distance=PROXIMITY_MIN_DISTANCE,
-        max_distance=PROXIMITY_MAX_DISTANCE
+        min_distance=0.5,
+        max_distance=3.0  # Changed from 5.0 to 3.0
     )
     advanced_vis.start()  # Start the visualization thread
     
