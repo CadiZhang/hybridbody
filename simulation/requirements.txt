@@ -6,6 +6,7 @@ torchvision>=0.10.0   # Additional utilities for PyTorch
 timm>=0.6.12          # PyTorch Image Models - required by MiDaS
 einops>=0.4.1         # Tensor operations - required by MiDaS
 scipy>=1.7.0          # Scientific computing - required for optimization
+pygame>=2.0.0         # For 2D visualization
 
 # Optional dependencies
 panda3d>=1.10.0       # For 3D visualization (optional)

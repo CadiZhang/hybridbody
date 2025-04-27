@@ -25,6 +25,7 @@ import { Button } from '../components/button/Button.tsx';
 import { Toggle } from '../components/toggle/Toggle.tsx';
 import { Map } from '../components/Map.tsx';
 import { ESP32Camera } from '../components/ESP32Camera';
+import { ImageAnalysisResult } from '../components/ImageAnalysisResult';
 
 /******************************************************************************
  * Types
@@ -51,7 +52,7 @@ interface Coordinates {
 }
 
 // Add ESP32 stream URL to your environment variables or config
-const ESP32_STREAM_URL = 'http://192.168.1.103:81/stream';
+const ESP32_STREAM_URL = 'http://192.168.1.6:81/stream';
 
 export function App() {
   /******************************************************************************
@@ -150,6 +151,16 @@ export function App() {
   // Add new state for widget toggle
   const [activeWidget, setActiveWidget] = useState<'map' | 'camera'>('map');
 
+  // Add state for image analysis
+  const [imageAnalysis, setImageAnalysis] = useState<{
+    imageData?: string;
+    analysisText?: string;
+    isLoading?: boolean;
+  }>({});
+
+  // Add a state for our custom WebSocket
+  const [customWs, setCustomWs] = useState<WebSocket | null>(null);
+
   /******************************************************************************
    * Utility Functions
    ******************************************************************************/
@@ -209,11 +220,20 @@ export function App() {
 
     // Connect to realtime API
     await client.connect();
+    
+    // Connect custom WebSocket immediately
+    connectCustomWebSocket().then(success => {
+      if (success) {
+        console.log('Custom WebSocket connected during initialization');
+      } else {
+        console.warn('Failed to establish custom WebSocket during initialization, will retry later');
+      }
+    });
+    
     client.sendUserMessageContent([
       {
         type: `input_text`,
         text: `Hello!`,
-        // text: `For testing purposes, I want you to list ten car brands. Number each item, e.g. "one (or whatever number you are one): the item name".`
       },
     ]);
 
@@ -244,7 +264,13 @@ export function App() {
 
     const wavStreamPlayer = wavStreamPlayerRef.current;
     await wavStreamPlayer.interrupt();
-  }, []);
+    
+    // Also close the custom WebSocket
+    if (customWs) {
+      customWs.close();
+      setCustomWs(null);
+    }
+  }, [customWs]);
 
   const deleteConversationItem = useCallback(async (id: string) => {
     const client = clientRef.current;
@@ -295,6 +321,94 @@ export function App() {
       await wavRecorder.record((data) => client.appendInputAudio(data.mono));
     }
     setCanPushToTalk(value === 'none');
+  };
+
+  // Add a method to send custom messages via the relay server
+  const sendViaCustomWs = (message: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if (!customWs) {
+        reject(new Error('Custom WebSocket not connected'));
+        return;
+      }
+      
+      // Ensure the message has a model parameter if it's for chat completions
+      if (message.endpoint === '/v1/chat/completions' && !message.model) {
+        message.model = 'gpt-4o'; // Updated to a current model
+        console.log('Added default model parameter to message:', message.model);
+      }
+      
+      const messageHandler = (event: MessageEvent) => {
+        try {
+          const response = JSON.parse(event.data);
+          customWs.removeEventListener('message', messageHandler);
+          resolve(response);
+        } catch (error) {
+          customWs.removeEventListener('message', messageHandler);
+          reject(error);
+        }
+      };
+      
+      customWs.addEventListener('message', messageHandler);
+      customWs.send(JSON.stringify(message));
+    });
+  };
+
+  // Modify the ensureWebSocketConnection function to be more robust
+  const ensureWebSocketConnection = async (): Promise<WebSocket> => {
+    // Check if we already have an open connection
+    if (customWs && customWs.readyState === WebSocket.OPEN) {
+      return customWs;
+    }
+    
+    // Close any existing non-open connection
+    if (customWs && customWs.readyState !== WebSocket.OPEN) {
+      customWs.close();
+      setCustomWs(null);
+    }
+    
+    // Make sure we have a relay server URL
+    if (!LOCAL_RELAY_SERVER_URL) {
+      throw new Error('Relay server URL not available');
+    }
+    
+    // Create a new WebSocket connection
+    const wsUrl = LOCAL_RELAY_SERVER_URL.replace('http', 'ws');
+    console.log(`Creating new WebSocket connection to: ${wsUrl}`);
+    
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(wsUrl);
+      
+      const timeout = setTimeout(() => {
+        reject(new Error('WebSocket connection timeout'));
+      }, 5000);
+      
+      ws.onopen = () => {
+        console.log('New WebSocket connected successfully');
+        clearTimeout(timeout);
+        setCustomWs(ws);
+        resolve(ws);
+      };
+      
+      ws.onerror = (error) => {
+        clearTimeout(timeout);
+        console.error('WebSocket connection error:', error);
+        reject(new Error('Failed to connect to WebSocket'));
+      };
+    });
+  };
+
+  // Add a helper that forces a direct connection attempt
+  const connectCustomWebSocket = async () => {
+    try {
+      if (!customWs || customWs.readyState !== WebSocket.OPEN) {
+        await ensureWebSocketConnection();
+        return true;
+      }
+      return true;
+    } catch (error) {
+      console.error('Failed to connect WebSocket:', error);
+      return false;
+    }
   };
 
   /******************************************************************************
@@ -383,6 +497,162 @@ export function App() {
         };
         setMarker({ lat, lng, location, temperature, wind_speed });
         return json;
+      },
+    );
+
+    // Add the take_picture tool
+    client.addTool(
+      {
+        name: 'take_picture',
+        description: 'Captures an image from the ESP32 camera and analyzes it using OpenAI vision API.',
+        parameters: {
+          type: 'object',
+          properties: {
+            prompt: {
+              type: 'string',
+              description: 'Optional prompt to guide the image analysis. If not provided, a general description will be returned.',
+            },
+          },
+          required: [],
+        },
+      },
+      async ({ prompt }: { prompt?: string }) => {
+        // Set loading state
+        setImageAnalysis({ isLoading: true });
+        
+        try {
+          // First check ESP32 camera connectivity
+          console.log(`Testing ESP32 camera connectivity before capture...`);
+          
+          try {
+            const testUrl = `${LOCAL_RELAY_SERVER_URL}/test-esp32?url=${encodeURIComponent(ESP32_STREAM_URL.replace('/stream', '/status'))}`;
+            const testResp = await fetch(testUrl);
+            const testResult = await testResp.json();
+            
+            if (!testResult.success) {
+              throw new Error(`Camera connectivity test failed: ${testResult.error}`);
+            }
+            
+            console.log(`ESP32 camera connectivity test successful`);
+          } catch (connectError: unknown) {
+            console.error(`ESP32 camera connectivity test failed:`, connectError);
+            throw new Error(`Failed to connect to ESP32 camera: ${connectError instanceof Error ? connectError.message : String(connectError)}`);
+          }
+          
+          // Ensure we have a WebSocket connection
+          const ws = await ensureWebSocketConnection();
+          
+          // Get camera image from our server endpoint instead of using canvas
+          const captureUrl = `${LOCAL_RELAY_SERVER_URL}/capture-image?url=${encodeURIComponent(ESP32_STREAM_URL.replace('/stream', '/capture'))}`;
+          console.log(`Fetching image from: ${captureUrl}`);
+          
+          const resp = await fetch(captureUrl);
+          
+          if (!resp.ok) {
+            const errorData = await resp.json().catch(() => ({ error: resp.statusText }));
+            throw new Error(`Failed to capture image: ${errorData.error || resp.statusText}`);
+          }
+          
+          // Convert the image to base64
+          const blob = await resp.blob();
+          
+          // Log image details
+          console.log(`Captured image details:
+            - Size: ${blob.size} bytes
+            - Type: ${blob.type}
+          `);
+          
+          if (blob.size === 0) {
+            throw new Error('Received empty image from camera');
+          }
+          
+          const imageData = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+          
+          // Update UI with the captured image
+          setImageAnalysis({
+            imageData,
+            isLoading: true
+          });
+          
+          // Extract base64 data for sending to OpenAI
+          const base64Data = imageData.split(',')[1];
+          
+          // Log image details for debugging
+          console.log(`Base64 image details:
+            - Length: ${base64Data.length} characters
+            - Sample: ${base64Data.substring(0, 20)}...
+          `);
+          
+          // Create a message to send via the relay server
+          const message = {
+            endpoint: '/v1/chat/completions',
+            model: 'gpt-4o',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: prompt || "What's in this image?" },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/jpeg;base64,${base64Data}`,
+                    },
+                  },
+                ],
+              },
+            ],
+            max_tokens: 500,
+          };
+          
+          console.log(`Sending vision analysis request to OpenAI via WebSocket`);
+          
+          // Send to OpenAI via WebSocket
+          const response = await sendViaCustomWs(message);
+          
+          console.log(`Received vision analysis response:`, response.status);
+          
+          if (response.status !== 200) {
+            throw new Error(`OpenAI API returned error: ${response.data?.error?.message || 'Unknown error'}`);
+          }
+          
+          // Update state with analysis
+          setImageAnalysis({
+            imageData,
+            analysisText: response.data.choices[0].message.content,
+            isLoading: false
+          });
+          
+          return {
+            status: 'success',
+            imageData: imageData,
+            analysis: response.data.choices[0].message.content,
+          };
+        } catch (error: unknown) {
+          console.error('Error analyzing image:', error);
+          
+          const errorMessage = error instanceof Error ? 
+            error.message : 
+            String(error);
+          
+          setImageAnalysis({
+            imageData: undefined,
+            analysisText: `Error: ${errorMessage}`,
+            isLoading: false
+          });
+          
+          return {
+            status: 'error',
+            error: errorMessage,
+            details: error instanceof Error ? {
+              name: error.name,
+              stack: error.stack
+            } : undefined
+          };
+        }
       },
     );
 
@@ -796,10 +1066,38 @@ export function App() {
                   </div>
                 </div>
                 {activeWidget === 'camera' && (
-                  <ESP32Camera 
-                    streamUrl={ESP32_STREAM_URL}
-                    onError={(error) => console.error('Camera Error:', error)}
-                  />
+                  <div className="h-full flex flex-col">
+                    <div className="flex-1 relative">
+                      <ESP32Camera 
+                        streamUrl={ESP32_STREAM_URL}
+                        onCapture={(imageData) => {
+                          setImageAnalysis({ imageData });
+                        }}
+                        onError={(error) => console.error('Camera Error:', error)}
+                      />
+                      
+                      {/* Add a manual connection button */}
+                      <div className="absolute top-12 right-4 z-10">
+                        <button 
+                          onClick={connectCustomWebSocket}
+                          className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-sm hover:bg-white transition-colors"
+                        >
+                          Connect Camera WebSocket
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {/* Image analysis results */}
+                    {(imageAnalysis.imageData || imageAnalysis.analysisText || imageAnalysis.isLoading) && (
+                      <div className="p-4 border-t border-gray-100">
+                        <ImageAnalysisResult 
+                          imageData={imageAnalysis.imageData}
+                          analysisText={imageAnalysis.analysisText}
+                          isLoading={imageAnalysis.isLoading}
+                        />
+                      </div>
+                    )}
+                  </div>
                 )}
               </>
             )}

@@ -150,6 +150,37 @@ def depth_to_metric_inverse(depth_map: np.ndarray,
     
     return metric_depth
 
+def depth_to_metric_linear(depth_map: np.ndarray,
+                          slope: float = 4.0,
+                          intercept: float = 0.5,
+                          min_depth: float = 0.5,
+                          max_depth: float = 5.0) -> np.ndarray:
+    """
+    Convert normalized depth to metric using simple linear relationship.
+    
+    metric_depth = slope * depth_map + intercept
+    
+    Args:
+        depth_map: Normalized depth map (0-1 range, 1=closest)
+        slope: Scaling factor for converting depth to distance
+        intercept: Vertical offset (y-intercept) for the linear function
+        min_depth: Minimum depth in meters
+        max_depth: Maximum depth in meters
+        
+    Returns:
+        Depth map in metric units (meters)
+    """
+    # Ensure depth is properly normalized
+    depth_map = np.clip(depth_map, 0.0, 1.0)
+    
+    # Apply linear transformation
+    metric_depth = slope * depth_map + intercept
+    
+    # Clamp to min/max range for safety
+    metric_depth = np.clip(metric_depth, min_depth, max_depth)
+    
+    return metric_depth
+
 class DepthCalibrator:
     """
     Handles depth calibration using known reference distances.

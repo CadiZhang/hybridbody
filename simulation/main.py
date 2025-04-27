@@ -22,7 +22,8 @@ from utils.depth_analysis import find_nearest_point, find_nearest_clusters, mark
 from utils.config import (PROXIMITY_BAR_WIDTH, PROXIMITY_BAR_HEIGHT, 
                          PROXIMITY_MIN_DISTANCE, PROXIMITY_MAX_DISTANCE,
                          PROXIMITY_SEGMENTS, PROXIMITY_HAPTIC_MIN, PROXIMITY_HAPTIC_MAX)
-
+from visualization.advanced_visualization import AdvancedVisualization
+import pygame
 # Create necessary directories if they don't exist
 os.makedirs("camera", exist_ok=True)
 os.makedirs("utils", exist_ok=True)
@@ -30,20 +31,33 @@ os.makedirs("depth_estimation", exist_ok=True)
 os.makedirs("visualization", exist_ok=True)
 
 # Define the adjust_parameters function outside the main loop
-def adjust_parameters(estimator, alpha_delta=0, beta_delta=0, gamma_delta=0, offset_delta=0):
+def adjust_parameters(estimator, alpha_delta=0, beta_delta=0, gamma_delta=0, offset_delta=0, 
+                     slope_delta=0, intercept_delta=0):
     """Manually adjust calibration parameters"""
-    estimator.alpha = max(0.1, estimator.alpha + alpha_delta)
-    estimator.beta = max(0.1, estimator.beta + beta_delta)
-    estimator.gamma = max(0.01, estimator.gamma + gamma_delta)
-    estimator.offset = estimator.offset + offset_delta
-    print(f"Adjusted parameters: alpha={estimator.alpha:.2f}, beta={estimator.beta:.2f}, gamma={estimator.gamma:.2f}, offset={estimator.offset:.2f}")
-    estimator.save_calibration()
+    if estimator.use_linear_mapping:
+        estimator.slope = max(0.1, estimator.slope + slope_delta)
+        estimator.intercept = estimator.intercept + intercept_delta
+        print(f"Adjusted linear parameters: slope={estimator.slope:.2f}, intercept={estimator.intercept:.2f}")
+        
+        # Show predicted distances at key depths
+        print("Predicted distances:")
+        for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
+            dist = estimator.slope * d + estimator.intercept
+            print(f"  depth={d:.1f} → distance={dist:.2f}m")
+    else:
+        estimator.alpha = max(0.1, estimator.alpha + alpha_delta)
+        estimator.beta = max(0.1, estimator.beta + beta_delta)
+        estimator.gamma = max(0.01, estimator.gamma + gamma_delta)
+        estimator.offset = estimator.offset + offset_delta
+        print(f"Adjusted inverse parameters: alpha={estimator.alpha:.2f}, beta={estimator.beta:.2f}, gamma={estimator.gamma:.2f}, offset={estimator.offset:.2f}")
+        
+        # Show predicted distances at key depths
+        print("Predicted distances:")
+        for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
+            dist = estimator.alpha / (estimator.beta * (1.0 - d) + estimator.gamma) + estimator.offset
+            print(f"  depth={d:.1f} → distance={dist:.2f}m")
     
-    # Show predicted distances at key depths
-    print("Predicted distances:")
-    for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
-        dist = estimator.alpha / (estimator.beta * (1.0 - d) + estimator.gamma) + estimator.offset
-        print(f"  depth={d:.1f} → distance={dist:.2f}m")
+    estimator.save_calibration()
 
 def main():
     """
@@ -93,19 +107,18 @@ def main():
     from depth_estimation import DepthEstimator
     depth_estimator = DepthEstimator()
     
-    # Initialize the proximity bar
-    from visualization.proximity_bar import ProximityBar
-    proximity_bar = ProximityBar(
-        width=PROXIMITY_BAR_WIDTH,
-        height=PROXIMITY_BAR_HEIGHT,
+    # Initialize the advanced visualization (replacing proximity_bar and directional_pulse)
+    advanced_vis = AdvancedVisualization(
+        width=800,
+        height=500,
         min_distance=PROXIMITY_MIN_DISTANCE,
-        max_distance=PROXIMITY_MAX_DISTANCE,
-        segments=PROXIMITY_SEGMENTS
+        max_distance=PROXIMITY_MAX_DISTANCE
     )
+    advanced_vis.start()  # Start the visualization thread
     
     # Initialize tracking variables
-    last_haptic_time = 0  # To avoid spamming haptic messages
-    haptic_cooldown = 1.0  # Seconds between haptic messages
+    last_haptic_time = 0
+    haptic_cooldown = 1.0
     
     # Add tracking for depth values at center point
     depth_values = []  # Store recent depth values for plotting
@@ -174,20 +187,18 @@ def main():
             distance = metric_depth[y, x] if metric_depth is not None else None
             nearest_point['distance'] = distance  # Update in case it's used elsewhere
             
-            # Update proximity bar and check for haptic feedback
+            # Update the advanced visualization with the current distance
             if distance is not None:
-                haptic_triggered = proximity_bar.update(distance)
+                advanced_vis.update(distance, direction="N")
+                
+                # Check for haptic feedback conditions
+                haptic_triggered = (PROXIMITY_HAPTIC_MIN <= distance <= PROXIMITY_HAPTIC_MAX)
                 
                 # Print haptic feedback message with cooldown
                 current_time = time.time()
                 if haptic_triggered and (current_time - last_haptic_time) > haptic_cooldown:
                     print("haptic feedback invoked")
                     last_haptic_time = current_time
-                
-                # Render the proximity bar
-                bar_image = proximity_bar.render()
-                print("Rendering proximity bar window")
-                cv2.imshow("Proximity Bar", bar_image)
             
             # Only print debug information if debug flag is set
             if args.debug and metric_depth is not None:
@@ -219,13 +230,18 @@ def main():
                     # Create overlay of depth on RGB
                     from depth_estimation.normalize import create_depth_overlay
                     display_frame = create_depth_overlay(frame, depth_colored, alpha=0.6)
-                    print("Created depth overlay")
                 elif args.view == "side-by-side":
                     # Create side-by-side view
                     display_frame = np.hstack((frame, depth_colored))
                 
                 # Mark the nearest point on the display frame
                 display_frame = mark_nearest_point(display_frame, nearest_point)
+                
+                # Add title with distance information
+                if distance is not None:
+                    title = f"Blind Navigation System - Distance: {distance:.2f}m"
+                    cv2.putText(display_frame, title, (10, 25), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
                 # Show the visualization
                 cv2.imshow("Blind Navigation System", display_frame)
@@ -249,10 +265,17 @@ def main():
                     print(f"View mode changed to: {args.view}")
                 elif key == ord('r'):
                     print("Resetting calibration to defaults...")
-                    depth_estimator.alpha = 4.0    # Increased from 3.5
-                    depth_estimator.beta = 2.0     # Decreased from 2.5
-                    depth_estimator.gamma = 0.05   # Keep as is
-                    depth_estimator.offset = -0.7  # Keep as is
+                    if depth_estimator.use_linear_mapping:
+                        depth_estimator.slope = 4.0
+                        depth_estimator.intercept = 0.5
+                        print(f"Reset to linear defaults: slope={depth_estimator.slope}, intercept={depth_estimator.intercept}")
+                    else:
+                        depth_estimator.alpha = 4.5
+                        depth_estimator.beta = 1.8
+                        depth_estimator.gamma = 0.05
+                        depth_estimator.offset = -0.7
+                        print(f"Reset to inverse defaults: alpha={depth_estimator.alpha}, beta={depth_estimator.beta}, gamma={depth_estimator.gamma}, offset={depth_estimator.offset}")
+                    
                     depth_estimator.calibration_points = []
                     depth_estimator.save_calibration()
                     print("Calibration reset complete.")
@@ -293,6 +316,23 @@ def main():
                     else:
                         print("Calibration complete with multiple points.")
                         calibration_mode = False
+                
+                # Add a key handler for toggling between linear and inverse mapping
+                elif key == ord('l'):  # 'l' for linear toggle
+                    depth_estimator.use_linear_mapping = not depth_estimator.use_linear_mapping
+                    mapping_type = "linear" if depth_estimator.use_linear_mapping else "inverse"
+                    print(f"Switched to {mapping_type} depth mapping")
+                    depth_estimator.save_calibration()
+                
+                # Linear parameter adjustment keys
+                elif key == ord('u'):  # Increase slope
+                    adjust_parameters(depth_estimator, slope_delta=0.1)
+                elif key == ord('j'):  # Decrease slope
+                    adjust_parameters(depth_estimator, slope_delta=-0.1)
+                elif key == ord('i'):  # Increase intercept
+                    adjust_parameters(depth_estimator, intercept_delta=0.1)
+                elif key == ord('k'):  # Decrease intercept
+                    adjust_parameters(depth_estimator, intercept_delta=-0.1)
             
             # Control the frame rate
             elapsed = time.time() - start_time
@@ -302,7 +342,7 @@ def main():
             
             # Calculate and occasionally display the actual FPS
             actual_fps = 1.0 / (time.time() - start_time)
-            if args.display and int(time.time()) % 5 == 0:  # Every 5 seconds
+            if args.display and frame_count % 150 == 0:  # Every ~5 seconds at 30fps
                 print(f"FPS: {actual_fps:.2f}")
     
     except KeyboardInterrupt:
@@ -310,8 +350,10 @@ def main():
         print("Exiting...")
     finally:
         # Clean up resources
+        advanced_vis.stop()  # Stop the visualization thread
         camera.release()
         cv2.destroyAllWindows()
+        pygame.quit()
 
 # This is the entry point when the script is run directly
 if __name__ == "__main__":

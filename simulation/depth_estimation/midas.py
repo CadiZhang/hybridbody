@@ -51,11 +51,16 @@ class DepthEstimator:
         self.input_width = 256  # Keep dimensions as multiples of 32 for deep learning models
         self.input_height = 192  # Keep dimensions as multiples of 32 for deep learning models
         
-        # Initialize inverse depth model parameters with improved values
-        self.alpha = 4.0    # Increased from 3.5 to make mid/far values higher
-        self.beta = 2.0     # Decreased from 2.5 to increase values in mid-range 
-        self.gamma = 0.05   # Keep as is
-        self.offset = -0.7  # Keep as is
+        # Initialize linear depth model parameters
+        self.use_linear_mapping = True  # Use linear mapping by default
+        self.slope = 4.0     # Initial slope for linear mapping
+        self.intercept = 0.5 # Initial intercept for linear mapping
+        
+        # Keep inverse model parameters for backward compatibility
+        self.alpha = 4.5
+        self.beta = 1.8
+        self.gamma = 0.05
+        self.offset = -0.7
         
         # Initialize depth scaling parameters with safer thresholds
         self.depth_scale_factor = 3.0  # Keep for backward compatibility
@@ -163,13 +168,25 @@ class DepthEstimator:
                         self.depth_scale_factor = data['scale_factor']
                         print(f"Loaded legacy calibration: scale_factor = {self.depth_scale_factor}")
                     
+                    # Load mapping type
+                    if 'use_linear_mapping' in data:
+                        self.use_linear_mapping = data['use_linear_mapping']
+                    
+                    # Load linear parameters if present
+                    if 'slope' in data and 'intercept' in data:
+                        self.slope = data['slope']
+                        self.intercept = data['intercept']
+                        if self.use_linear_mapping:
+                            print(f"Loaded linear calibration parameters: slope={self.slope}, intercept={self.intercept}")
+                    
                     # Load inverse model parameters if present
                     if all(key in data for key in ['alpha', 'beta', 'gamma']):
                         self.alpha = data['alpha']
                         self.beta = data['beta']
                         self.gamma = data['gamma']
-                        self.offset = data.get('offset', -0.3)  # Default to -0.3 if not present
-                        print(f"Loaded calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}, offset={self.offset}")
+                        self.offset = data.get('offset', -0.3)
+                        if not self.use_linear_mapping:
+                            print(f"Loaded inverse calibration parameters: alpha={self.alpha}, beta={self.beta}, gamma={self.gamma}, offset={self.offset}")
                     
                     # Load calibration points if present
                     if 'calibration_points' in data:
@@ -189,10 +206,16 @@ class DepthEstimator:
                     'beta': self.beta,
                     'gamma': self.gamma,
                     'offset': self.offset,
+                    'use_linear_mapping': self.use_linear_mapping,
+                    'slope': self.slope,
+                    'intercept': self.intercept,
                     'calibration_points': self.calibration_points
                 }
                 json.dump(data, f)
-                print(f"Saved calibration parameters: alpha={self.alpha:.2f}, beta={self.beta:.2f}, gamma={self.gamma:.2f}, offset={self.offset:.2f}")
+                if self.use_linear_mapping:
+                    print(f"Saved linear calibration parameters: slope={self.slope:.2f}, intercept={self.intercept:.2f}")
+                else:
+                    print(f"Saved inverse calibration parameters: alpha={self.alpha:.2f}, beta={self.beta:.2f}, gamma={self.gamma:.2f}, offset={self.offset:.2f}")
         except Exception as e:
             print(f"Could not save calibration: {e}")
 
@@ -209,60 +232,86 @@ class DepthEstimator:
         self.save_calibration()
 
     def update_calibration_parameters(self):
-        """Update alpha, beta, gamma parameters using collected calibration points"""
-        if len(self.calibration_points) < 3:
-            print("Need at least 3 calibration points to fit the inverse model")
+        """Update calibration parameters using collected calibration points"""
+        if len(self.calibration_points) < 2:
+            print("Need at least 2 calibration points to fit parameters")
             return
         
-        try:
-            import scipy.optimize as optimize
-            
-            # Extract depth values and actual distances
-            depth_values = np.array([point[0] for point in self.calibration_points])
-            actual_distances = np.array([point[1] for point in self.calibration_points])
-            
-            # Print calibration points for debugging
-            print("Calibration points:")
-            for i, (depth, dist) in enumerate(zip(depth_values, actual_distances)):
-                print(f"  Point {i+1}: depth={depth:.3f}, distance={dist}m")
-            
-            # Define the inverse function to fit
-            def inverse_func(x, a, b, c):
-                return a / (b * (1.0 - x) + c)
-            
-            # Initial parameter guess (current values)
-            initial_guess = [self.alpha, self.beta, self.gamma]
-            
-            # Find optimal parameters with tighter bounds
-            params, _ = optimize.curve_fit(
-                inverse_func, depth_values, actual_distances,
-                p0=initial_guess,
-                bounds=([0.5, 0.5, 0.01], [10.0, 10.0, 0.5])  # More conservative bounds
-            )
-            
-            # Update parameters
-            self.alpha, self.beta, self.gamma = params
-            print(f"Updated calibration parameters: alpha={self.alpha:.3f}, beta={self.beta:.3f}, gamma={self.gamma:.3f}")
-            
-            # Compute and print mean absolute error
-            predicted = inverse_func(depth_values, *params)
-            mean_abs_error = np.mean(np.abs(predicted - actual_distances))
-            print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
-            
-            # Print test values for important ranges
-            test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
-            print("Predicted distances at test depths:")
-            for d in test_depths:
-                pred = inverse_func(d, *params)
-                print(f"  depth={d:.1f} → distance={pred:.2f}m")
-            
-        except Exception as e:
-            print(f"Error updating calibration parameters: {e}")
-            print("Falling back to default parameters")
-            # Reset to sensible defaults
-            self.alpha = 4.0
-            self.beta = 2.0
-            self.gamma = 0.05
+        # Extract depth values and actual distances
+        depth_values = np.array([point[0] for point in self.calibration_points])
+        actual_distances = np.array([point[1] for point in self.calibration_points])
+        
+        # Print calibration points for debugging
+        print("Calibration points:")
+        for i, (depth, dist) in enumerate(zip(depth_values, actual_distances)):
+            print(f"  Point {i+1}: depth={depth:.3f}, distance={dist}m")
+        
+        if self.use_linear_mapping:
+            try:
+                # Simple linear regression
+                A = np.vstack([depth_values, np.ones_like(depth_values)]).T
+                self.slope, self.intercept = np.linalg.lstsq(A, actual_distances, rcond=None)[0]
+                print(f"Updated linear parameters: slope={self.slope:.3f}, intercept={self.intercept:.3f}")
+                
+                # Compute and print mean absolute error
+                predicted = self.slope * depth_values + self.intercept
+                mean_abs_error = np.mean(np.abs(predicted - actual_distances))
+                print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
+                
+                # Print test values for important ranges
+                test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
+                print("Predicted distances at test depths:")
+                for d in test_depths:
+                    pred = self.slope * d + self.intercept
+                    print(f"  depth={d:.1f} → distance={pred:.2f}m")
+                    
+            except Exception as e:
+                print(f"Error updating linear parameters: {e}")
+                # Reset to sensible defaults
+                self.slope = 4.0
+                self.intercept = 0.5
+        else:
+            # Existing inverse function fitting code
+            try:
+                import scipy.optimize as optimize
+                
+                # Define the inverse function to fit
+                def inverse_func(x, a, b, c):
+                    return a / (b * (1.0 - x) + c)
+                
+                # Initial parameter guess (current values)
+                initial_guess = [self.alpha, self.beta, self.gamma]
+                
+                # Find optimal parameters with tighter bounds
+                params, _ = optimize.curve_fit(
+                    inverse_func, depth_values, actual_distances,
+                    p0=initial_guess,
+                    bounds=([0.5, 0.5, 0.01], [10.0, 10.0, 0.5])
+                )
+                
+                # Update parameters
+                self.alpha, self.beta, self.gamma = params
+                print(f"Updated inverse parameters: alpha={self.alpha:.3f}, beta={self.beta:.3f}, gamma={self.gamma:.3f}")
+                
+                # Compute and print mean absolute error
+                predicted = inverse_func(depth_values, *params)
+                mean_abs_error = np.mean(np.abs(predicted - actual_distances))
+                print(f"Mean absolute error after calibration: {mean_abs_error:.3f}m")
+                
+                # Print test values for important ranges
+                test_depths = [0.1, 0.3, 0.5, 0.7, 0.9]
+                print("Predicted distances at test depths:")
+                for d in test_depths:
+                    pred = inverse_func(d, *params)
+                    print(f"  depth={d:.1f} → distance={pred:.2f}m")
+                
+            except Exception as e:
+                print(f"Error updating inverse parameters: {e}")
+                print("Falling back to default parameters")
+                # Reset to sensible defaults
+                self.alpha = 4.5
+                self.beta = 1.8
+                self.gamma = 0.05
 
     def calibrate(self, known_distance: float, depth_value: float):
         """
@@ -277,7 +326,7 @@ class DepthEstimator:
 
     def estimate_depth(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Estimate depth with EMA stabilization and improved metric conversion
+        Estimate depth with EMA stabilization and metric conversion
         """
         # Record original size
         original_size = frame.shape[:2]
@@ -296,25 +345,39 @@ class DepthEstimator:
             # Apply EMA filtering for stability
             depth_map = self.depth_filter.filter(depth_map)
             
-            # Convert to metric depth using inverse relationship model
-            # Import here to avoid circular import
-            from .normalize import depth_to_metric_inverse
-            
-            # Use calibrated parameters or defaults
-            alpha = getattr(self, 'alpha', 4.0)
-            beta = getattr(self, 'beta', 2.0)
-            gamma = getattr(self, 'gamma', 0.05)
-            offset = getattr(self, 'offset', -0.7)
-            
-            metric_depth = depth_to_metric_inverse(
-                depth_map,
-                alpha=alpha,
-                beta=beta,
-                gamma=gamma,
-                offset=offset,
-                min_depth=self.depth_min,
-                max_depth=self.depth_max
-            )
+            # Import required functions here to avoid circular import
+            if self.use_linear_mapping:
+                from .normalize import depth_to_metric_linear
+                
+                # Use calibrated linear parameters or defaults
+                slope = getattr(self, 'slope', 4.0)
+                intercept = getattr(self, 'intercept', 0.5)
+                
+                metric_depth = depth_to_metric_linear(
+                    depth_map,
+                    slope=slope,
+                    intercept=intercept,
+                    min_depth=self.depth_min,
+                    max_depth=self.depth_max
+                )
+            else:
+                from .normalize import depth_to_metric_inverse
+                
+                # Use calibrated inverse parameters or defaults
+                alpha = getattr(self, 'alpha', 4.5)
+                beta = getattr(self, 'beta', 1.8)
+                gamma = getattr(self, 'gamma', 0.05)
+                offset = getattr(self, 'offset', -0.7)
+                
+                metric_depth = depth_to_metric_inverse(
+                    depth_map,
+                    alpha=alpha,
+                    beta=beta,
+                    gamma=gamma,
+                    offset=offset,
+                    min_depth=self.depth_min,
+                    max_depth=self.depth_max
+                )
             
         except Exception as e:
             print(f"Error during depth estimation: {e}")
@@ -386,7 +449,12 @@ class DepthEstimator:
             depth_values = np.linspace(0, 1, 100)
             
             # Calculate corresponding distances using current parameters
-            distances = self.alpha / (self.beta * (1.0 - depth_values) + self.gamma) + self.offset
+            if self.use_linear_mapping:
+                distances = self.slope * depth_values + self.intercept
+                formula = f"distance = {self.slope:.2f} * depth + {self.intercept:.2f}"
+            else:
+                distances = self.alpha / (self.beta * (1.0 - depth_values) + self.gamma) + self.offset
+                formula = f"distance = {self.alpha:.2f} / ({self.beta:.2f} * (1 - depth) + {self.gamma:.2f}) + {self.offset:.2f}"
             
             # Create the plot
             plt.figure(figsize=(10, 6))
@@ -400,19 +468,23 @@ class DepthEstimator:
             
             # Mark key depths with vertical lines
             for d in [0.1, 0.3, 0.5, 0.7, 0.9]:
-                dist = self.alpha / (self.beta * (1.0 - d) + self.gamma) + self.offset
+                if self.use_linear_mapping:
+                    dist = self.slope * d + self.intercept
+                else:
+                    dist = self.alpha / (self.beta * (1.0 - d) + self.gamma) + self.offset
+                    
                 plt.axvline(x=d, color='gray', linestyle='--', alpha=0.5)
                 plt.text(d+0.01, 0.5, f"{d:.1f} → {dist:.2f}m", rotation=90, verticalalignment='center')
             
             # Add labels and title
             plt.xlabel('Normalized Depth')
             plt.ylabel('Distance (meters)')
-            plt.title('Depth to Distance Mapping')
+            title = "Linear Depth Mapping" if self.use_linear_mapping else "Inverse Depth Mapping"
+            plt.title(title)
             plt.grid(True)
             plt.ylim(0, 6)
             
             # Add formula and parameters
-            formula = f"distance = {self.alpha:.2f} / ({self.beta:.2f} * (1 - depth) + {self.gamma:.2f}) + {self.offset:.2f}"
             plt.figtext(0.5, 0.01, formula, ha='center', fontsize=12)
             
             # Show the plot
