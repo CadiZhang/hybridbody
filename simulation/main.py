@@ -88,6 +88,14 @@ def main():
                         help="Enter calibration mode")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug output")
+    parser.add_argument("--detect-objects", action="store_true", 
+                      help="Enable object detection using Roboflow")
+    parser.add_argument("--detection-confidence", type=float, default=0.65,
+                      help="Confidence threshold for object detection (0.0-1.0)")
+    parser.add_argument("--detection-model", type=str, default="chair-detection-y06j5/1",
+                      help="Roboflow model ID to use for detection")
+    parser.add_argument("--detection-frequency", type=int, default=3,
+                      help="Process detection every N frames (higher values improve performance)")
     
     # Parse the arguments
     args = parser.parse_args()
@@ -129,11 +137,21 @@ def main():
     avg_depth_time = 0.0
     alpha = 0.1  # Smoothing factor for moving average
     
+    # Initialize object detection if enabled
+    if args.detect_objects:
+        from camera.roboflow_inference import detect_objects_in_frame, CLIENT
+        print(f"Object detection enabled with model: {args.detection_model}")
+        print(f"Detection confidence threshold: {args.detection_confidence}")
+    
     try:
         calibration_mode = False
         # Track which frames to process for depth
         last_depth_map = None
         last_metric_depth = None
+        
+        # Track object detection results
+        detection_results = {"predictions": []}
+        original_frame = None  # Store an unmodified frame copy
         
         while True:
             # Record the start time for FPS calculation
@@ -144,6 +162,30 @@ def main():
             if frame is None:
                 print("Failed to capture frame. Retrying...")
                 continue
+            
+            # Always keep an unmodified copy of the frame
+            original_frame = frame.copy()
+            
+            # Run object detection if enabled (every N frames for performance)
+            if args.detect_objects and frame_count % args.detection_frequency == 0:
+                detection_start = time.time()
+                # Use detect_objects_in_frame but don't modify the original frame
+                _, new_detection_results = detect_objects_in_frame(
+                    original_frame.copy(),  # Use a copy to avoid modifying our frame
+                    model_id=args.detection_model,
+                    confidence_threshold=args.detection_confidence
+                )
+                detection_end = time.time()
+                
+                # Update detection results if we got predictions
+                if new_detection_results.get("predictions"):
+                    detection_results = new_detection_results
+                    
+                    # Debug info for detections
+                    if args.debug:
+                        detection_time = detection_end - detection_start
+                        num_detections = len(detection_results.get("predictions", []))
+                        print(f"Object detection: {num_detections} objects found in {detection_time:.3f}s")
             
             # Increment frame counter
             frame_count += 1
@@ -223,23 +265,53 @@ def main():
                 
                 # Prepare display based on view mode
                 if args.view == "rgb":
-                    display_frame = frame.copy()
+                    display_frame = original_frame.copy()  # Use the unmodified frame
                 elif args.view == "depth":
                     display_frame = depth_colored.copy()
                 elif args.view == "overlay":
                     # Create overlay of depth on RGB
                     from depth_estimation.normalize import create_depth_overlay
-                    display_frame = create_depth_overlay(frame, depth_colored, alpha=0.6)
+                    display_frame = create_depth_overlay(original_frame.copy(), depth_colored, alpha=0.6)
                 elif args.view == "side-by-side":
                     # Create side-by-side view
-                    display_frame = np.hstack((frame, depth_colored))
+                    display_frame = np.hstack((original_frame.copy(), depth_colored))
                 
                 # Mark the nearest point on the display frame
                 display_frame = mark_nearest_point(display_frame, nearest_point)
                 
-                # Add title with distance information
-                if distance is not None:
-                    title = f"Blind Navigation System - Distance: {distance:.2f}m"
+                # Draw the most recent detection boxes on every frame if object detection is enabled
+                if args.detect_objects and detection_results.get("predictions"):
+                    for prediction in detection_results.get("predictions", []):
+                        confidence = prediction["confidence"]
+                        
+                        # Only draw detections above threshold
+                        if confidence >= args.detection_confidence:
+                            x, y, width, height = prediction["x"], prediction["y"], prediction["width"], prediction["height"]
+                            class_name = prediction["class"]
+                            
+                            # Convert coordinates to int
+                            x1 = int(x - width/2)
+                            y1 = int(y - height/2)
+                            x2 = int(x + width/2)
+                            y2 = int(y + height/2)
+                            
+                            # Draw rectangle with more prominent colors
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            
+                            # Add label
+                            label = f"{class_name}: {confidence:.2f}"
+                            # Create background for label text for better visibility
+                            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                            cv2.rectangle(display_frame, (x1, y1-text_size[1]-5), (x1+text_size[0], y1), (0, 0, 0), -1)
+                            cv2.putText(display_frame, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                
+                # Add detected object count to title
+                if args.detect_objects and detection_results:
+                    num_objects = len(detection_results.get("predictions", []))
+                    if distance is not None:
+                        title = f"Blind Navigation - Distance: {distance:.2f}m - Objects: {num_objects}"
+                    else:
+                        title = f"Blind Navigation - Objects: {num_objects}"
                     cv2.putText(display_frame, title, (10, 25), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 
@@ -333,6 +405,16 @@ def main():
                     adjust_parameters(depth_estimator, intercept_delta=0.1)
                 elif key == ord('k'):  # Decrease intercept
                     adjust_parameters(depth_estimator, intercept_delta=-0.1)
+                elif key == ord('o'):  # Toggle object detection
+                    args.detect_objects = not args.detect_objects
+                    status = "enabled" if args.detect_objects else "disabled"
+                    print(f"Object detection {status}")
+                elif key == ord('+'):  # Increase confidence threshold
+                    args.detection_confidence = min(0.95, args.detection_confidence + 0.05)
+                    print(f"Detection confidence threshold: {args.detection_confidence:.2f}")
+                elif key == ord('-'):  # Decrease confidence threshold
+                    args.detection_confidence = max(0.05, args.detection_confidence - 0.05)
+                    print(f"Detection confidence threshold: {args.detection_confidence:.2f}")
             
             # Control the frame rate
             elapsed = time.time() - start_time

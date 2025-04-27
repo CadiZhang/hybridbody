@@ -5,6 +5,11 @@ python -m venv venv
 source venv/bin/activate
 conda deactivate #deactive base
 
+# Run Code
+
+python main.py --display --view overlay --debug
+python main.py --display --view overlay --debug --detect-objects
+
 # Blind Navigation Assistance System
 
 A real-time navigation assistance system for visually impaired users that converts camera input into directional obstacle warnings using monocular depth estimation.
