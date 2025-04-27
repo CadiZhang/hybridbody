@@ -68,15 +68,19 @@ class AdvancedVisualization:
         
         # Right side: Proximity bar
         self.bar_width = 80
-        self.bar_height = height - 100
+        self.bar_height = height - 120  # Reduce height to leave room for labels
         self.bar_x = self.radar_width + (width - self.radar_width - self.bar_width) // 2
-        self.bar_y = 50
+        self.bar_y = 60  # Move down to leave room for title
         self.bar_segments = 10
         self.segment_height = self.bar_height // self.bar_segments
         
+        # Radar dimensions
+        self.radar_padding = 80  # Space for labels and titles
+        self.radar_radius = min(self.radar_width, self.radar_height - self.radar_padding) // 2 - 40
+        
         # Center coordinates for radar
         self.cx = self.radar_width // 2
-        self.cy = self.radar_height // 2
+        self.cy = (self.radar_height + self.radar_padding) // 2
         
         # Start visualization thread
         self.running = False
@@ -147,17 +151,17 @@ class AdvancedVisualization:
     def draw_background(self):
         """Draw the radar background with rotating grid."""
         # Draw title for conical radar section
-        title = self.font.render("DIRECTIONAL RADAR", True, (200, 200, 200))
+        title_font = pygame.font.SysFont("Arial", 22, bold=True)
+        title = title_font.render("DIRECTIONAL RADAR", True, (200, 200, 200))
         self.screen.blit(title, (self.cx - title.get_width() // 2, 15))
         
         # Draw direction indicator text
         direction_text = f"DIRECTION: {self.current_direction}"
         direction_label = self.font.render(direction_text, True, (200, 200, 200))
-        self.screen.blit(direction_label, (self.cx - direction_label.get_width() // 2, 40))
+        self.screen.blit(direction_label, (self.cx - direction_label.get_width() // 2, 45))
         
         # Draw concentric circles
-        radar_radius = min(self.cx, self.cy) - 60
-        for i, r in enumerate(range(radar_radius // 3, radar_radius + 1, radar_radius // 3)):
+        for i, r in enumerate(range(self.radar_radius // 3, self.radar_radius + 1, self.radar_radius // 3)):
             # Draw circle with grey color
             pygame.draw.circle(self.screen, (50, 50, 50), (self.cx, self.cy), r, 1)
             
@@ -173,7 +177,7 @@ class AdvancedVisualization:
         # Draw radial lines
         for i in range(0, 360, 30):
             angle = i + self.bg_angle
-            x, y = self.get_offset(angle, radar_radius)
+            x, y = self.get_offset(angle, self.radar_radius)
             pygame.draw.line(self.screen, (50, 50, 50), (self.cx, self.cy), (x, y), 1)
         
         # Rotate background slightly each frame
@@ -183,11 +187,16 @@ class AdvancedVisualization:
         """Draw pulsing center point."""
         pulse = 5 * math.sin(pygame.time.get_ticks() * 0.005) + 15
         pygame.draw.circle(self.screen, (100, 100, 100), (self.cx, self.cy), int(pulse))
+        
+        # Draw small user indicator at center
+        pygame.draw.circle(self.screen, (220, 220, 220), (self.cx, self.cy), 3)
+        
+        # Add "YOU" label
+        you_label = self.font.render("YOU", True, (220, 220, 220))
+        self.screen.blit(you_label, (self.cx - you_label.get_width() // 2, self.cy + 15))
     
     def draw_directional_cones(self, dt):
         """Draw conical visualizations for each direction."""
-        radar_radius = min(self.cx, self.cy) - 60
-        
         # We'll draw all cones but highlight the current direction
         for direction in self.directions:
             # Use current distance for all directions, but could be modified to have different
@@ -214,7 +223,7 @@ class AdvancedVisualization:
             final_length = int(state["length"] * pulse_factor)
             
             # Calculate cone vertices
-            inner_offset = 50
+            inner_offset = 30
             outer_offset = inner_offset + final_length
             half_angle = 20
             inner_left = self.get_offset(self.angle_lookup[direction] - half_angle, inner_offset)
@@ -239,8 +248,8 @@ class AdvancedVisualization:
                 # Add distance label
                 label_text = f"{direction}: {dist:.2f}m"
                 label = self.font.render(label_text, True, (255, 255, 255))
-                self.screen.blit(label, label.get_rect(center=self.get_offset(
-                    self.angle_lookup[direction], outer_offset + 20)))
+                label_pos = self.get_offset(self.angle_lookup[direction], outer_offset + 20)
+                self.screen.blit(label, label.get_rect(center=label_pos))
             else:
                 # Draw inactive directions with reduced opacity
                 pygame.draw.polygon(self.screen, tuple(int(c * 0.3) for c in state["color"]), vertices)
@@ -248,8 +257,8 @@ class AdvancedVisualization:
         # Draw cardinal direction indicators
         for i, direction in enumerate(["N", "E", "S", "W"]):
             angle = i * 90 - 90  # Convert to proper angle (N = -90, E = 0, etc.)
-            offset_x = int(radar_radius * 1.1 * math.cos(math.radians(angle)))
-            offset_y = int(radar_radius * 1.1 * math.sin(math.radians(angle)))
+            offset_x = int(self.radar_radius * 1.1 * math.cos(math.radians(angle)))
+            offset_y = int(self.radar_radius * 1.1 * math.sin(math.radians(angle)))
             pos_x = self.cx + offset_x
             pos_y = self.cy + offset_y
             
@@ -261,93 +270,97 @@ class AdvancedVisualization:
     def draw_proximity_bar(self):
         """Draw the proximity bar visualization on the right side."""
         # Draw bar title
-        title = self.font.render("PROXIMITY", True, (200, 200, 200))
+        title_font = pygame.font.SysFont("Arial", 22, bold=True)
+        title = title_font.render("PROXIMITY", True, (200, 200, 200))
         self.screen.blit(title, (self.bar_x + self.bar_width // 2 - title.get_width() // 2, 15))
-        
-        # Draw outer border with curved top
-        pygame.draw.rect(self.screen, (70, 70, 70), 
-                        (self.bar_x, self.bar_y, self.bar_width, self.bar_height), 2)
-        
-        # Draw curved top
-        radius = self.bar_width // 2
-        pygame.draw.circle(self.screen, (70, 70, 70), 
-                          (self.bar_x + radius, self.bar_y), radius, 2)
         
         # Draw bar background
         pygame.draw.rect(self.screen, (30, 30, 30), 
-                        (self.bar_x + 2, self.bar_y + 2, self.bar_width - 4, self.bar_height - 4))
+                        (self.bar_x, self.bar_y, self.bar_width, self.bar_height))
         
-        # Calculate fill level based on current distance
+        # Draw outer border (rectangular, no curved top)
+        pygame.draw.rect(self.screen, (70, 70, 70), 
+                        (self.bar_x, self.bar_y, self.bar_width, self.bar_height), 2)
+        
+        # Calculate fill height based on current distance
         if self.current_distance >= self.max_distance:
-            fill_segments = 0
+            fill_ratio = 0.0
         else:
             # Convert distance to fill ratio (inverse relationship)
             fill_ratio = 1.0 - ((self.current_distance - self.min_distance) / 
                                (self.max_distance - self.min_distance))
-            fill_segments = int(fill_ratio * self.bar_segments)
-            fill_segments = min(self.bar_segments, max(0, fill_segments))
         
-        # Draw segments with gradient
-        for i in range(fill_segments):
-            y_pos = self.bar_y + (self.bar_segments - i - 1) * self.segment_height
-            
-            # Calculate color based on segment position
-            rel_pos = i / self.bar_segments
-            if rel_pos < 0.33:  # Green zone (far)
-                color = (0, 255, 0)
-            elif rel_pos < 0.66:  # Yellow zone (medium)
-                blend = (rel_pos - 0.33) / 0.33
-                green = 255
-                red = int(255 * blend)
-                color = (red, green, 0)
-            else:  # Red zone (close)
-                blend = (rel_pos - 0.66) / 0.34
-                green = int(255 * (1 - blend))
-                red = 255
-                color = (red, green, 0)
-            
-            # Draw the segment
-            pygame.draw.rect(self.screen, color, 
-                            (self.bar_x + 4, y_pos, self.bar_width - 8, self.segment_height))
-            
-            # Add segment divider line
-            pygame.draw.line(self.screen, (40, 40, 40), 
-                            (self.bar_x, y_pos), 
-                            (self.bar_x + self.bar_width, y_pos), 1)
+        fill_ratio = max(0.0, min(1.0, fill_ratio))
+        fill_height = int(self.bar_height * fill_ratio)
         
-        # Fill curved top if any segments are filled
-        if fill_segments > 0:
-            # Determine color for the top segment
-            if fill_segments < self.bar_segments // 3:
-                top_color = (0, 255, 0)  # Green
-            elif fill_segments < 2 * self.bar_segments // 3:
-                top_color = (255, 255, 0)  # Yellow
-            else:
-                top_color = (255, 0, 0)  # Red
+        # Draw the filled portion of the bar (from top to bottom)
+        if fill_height > 0:
+            # Create a gradient fill from top to bottom
+            for y in range(self.bar_y, self.bar_y + fill_height):
+                # Normalize position within filled area
+                rel_pos = (y - self.bar_y) / fill_height
                 
-            # Draw filled circle for the top
-            pygame.draw.circle(self.screen, top_color, 
-                             (self.bar_x + radius, self.bar_y), radius - 4)
+                # Color transitions: green -> yellow -> red (from bottom to top)
+                if rel_pos > 0.66:  # Bottom third - Green (far)
+                    color = (0, 255, 0)
+                elif rel_pos > 0.33:  # Middle third - Yellow (medium)
+                    # Blend from green to yellow
+                    blend = (0.66 - rel_pos) / 0.33
+                    green = 255
+                    red = int(255 * (1 - blend))
+                    color = (red, green, 0)
+                else:  # Top third - Red (close)
+                    # Blend from yellow to red
+                    blend = (0.33 - rel_pos) / 0.33
+                    green = int(255 * blend)
+                    red = 255
+                    color = (red, green, 0)
+                
+                # Draw horizontal line with calculated color
+                pygame.draw.line(self.screen, color, 
+                               (self.bar_x + 3, y), 
+                               (self.bar_x + self.bar_width - 3, y))
+        
+        # Draw segment dividers
+        for i in range(1, self.bar_segments):
+            y_pos = self.bar_y + (self.bar_height * i) // self.bar_segments
+            pygame.draw.line(self.screen, (50, 50, 50), 
+                           (self.bar_x, y_pos), 
+                           (self.bar_x + self.bar_width, y_pos), 1)
         
         # Draw distance scale markers
         for i in range(6):
             y_pos = self.bar_y + i * (self.bar_height / 5)
-            distance_value = self.max_distance - i * (self.max_distance - self.min_distance) / 5
+            distance_value = self.min_distance + (5-i) * (self.max_distance - self.min_distance) / 5
             
             # Draw tick mark
             pygame.draw.line(self.screen, (150, 150, 150), 
-                            (self.bar_x - 5, y_pos), 
-                            (self.bar_x, y_pos), 1)
+                           (self.bar_x - 5, y_pos), 
+                           (self.bar_x, y_pos), 1)
             
-            # Add distance label
-            if i % 2 == 0:  # Only show every other label to avoid crowding
+            # Add distance label (every other marker)
+            if i % 2 == 0:
                 label = self.font.render(f"{distance_value:.1f}m", True, (150, 150, 150))
                 self.screen.blit(label, (self.bar_x - label.get_width() - 10, y_pos - label.get_height() // 2))
         
         # Add current distance text
         dist_text = self.font.render(f"{self.current_distance:.2f}m", True, (255, 255, 255))
         self.screen.blit(dist_text, (self.bar_x + self.bar_width // 2 - dist_text.get_width() // 2, 
-                                   self.bar_y + self.bar_height + 15))
+                                   self.bar_y + self.bar_height + 10))
+        
+        # Draw "YOU" indicator at the bottom
+        you_text = self.font.render("YOU", True, (220, 220, 220))
+        you_x = self.bar_x + self.bar_width // 2 - you_text.get_width() // 2
+        you_y = self.bar_y + self.bar_height + 32
+        self.screen.blit(you_text, (you_x, you_y))
+        
+        # Draw small arrow pointing up
+        arrow_points = [
+            (self.bar_x + self.bar_width // 2, you_y - 8),
+            (self.bar_x + self.bar_width // 2 - 5, you_y - 3),
+            (self.bar_x + self.bar_width // 2 + 5, you_y - 3)
+        ]
+        pygame.draw.polygon(self.screen, (220, 220, 220), arrow_points)
     
     def render_to_image(self) -> np.ndarray:
         """
